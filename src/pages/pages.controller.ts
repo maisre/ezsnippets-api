@@ -1,10 +1,22 @@
-import { Controller, Get, Param, Res, NotFoundException } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Param,
+  Res,
+  NotFoundException,
+  Request,
+  UseGuards,
+  Body,
+} from '@nestjs/common';
 import type { Response } from 'express';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { PagesService } from './pages.service';
 import { Page } from './interfaces/page.interface';
+import { CreatePageDto } from './dto/create-page.dto';
 import { SnippetsService } from '../snippets/snippets.service';
+import { JwtAuthGuard } from '../auth/jwt.strategy';
 
 @Controller('pages')
 export class PagesController {
@@ -13,14 +25,29 @@ export class PagesController {
     private readonly snippetsService: SnippetsService,
   ) {}
 
+  @UseGuards(JwtAuthGuard)
   @Get()
-  async findAll(): Promise<Page[]> {
-    return this.pagesService.findAll();
+  async findAll(@Request() req): Promise<Page[]> {
+    return this.pagesService.findForOwner(req.user.userId);
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Post()
+  async create(
+    @Body() createPageDto: CreatePageDto,
+    @Request() req,
+  ): Promise<Page> {
+    return this.pagesService.create(createPageDto, req.user.userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Get('view/:id')
-  async viewPage(@Param('id') id: string, @Res() res: Response) {
-    const page = await this.pagesService.findOne(id);
+  async viewPage(
+    @Param('id') id: string,
+    @Request() req,
+    @Res() res: Response,
+  ) {
+    const page = await this.pagesService.findOne(id, req.user.userId);
 
     if (!page) {
       throw new NotFoundException(`Page with id ${id} not found`);

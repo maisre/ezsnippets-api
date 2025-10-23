@@ -1,7 +1,8 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { Model, Types } from 'mongoose';
 import { Page } from './interfaces/page.interface';
 import { CreatePageDto } from './dto/create-page.dto';
+import { UpdatePageDto } from './dto/update-page.dto';
 
 @Injectable()
 export class PagesService {
@@ -37,5 +38,35 @@ export class PagesService {
 
     const createdPage = new this.pageModel(pageData);
     return createdPage.save();
+  }
+
+  async update(
+    id: string,
+    updatePageDto: UpdatePageDto,
+    userId: string,
+  ): Promise<Page> {
+    if (!Types.ObjectId.isValid(id) || !Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+
+    const updateData: any = {};
+    if (updatePageDto.name !== undefined) updateData.name = updatePageDto.name;
+    if (updatePageDto.projectId !== undefined) {
+      updateData.projectId = updatePageDto.projectId
+        ? new Types.ObjectId(updatePageDto.projectId)
+        : undefined;
+    }
+    if (updatePageDto.snippets !== undefined)
+      updateData.snippets = updatePageDto.snippets;
+
+    const updatedPage = await this.pageModel
+      .findOneAndUpdate({ _id: id, owner: userId }, updateData, { new: true })
+      .exec();
+
+    if (!updatedPage) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+
+    return updatedPage;
   }
 }

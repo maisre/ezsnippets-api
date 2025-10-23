@@ -2,6 +2,7 @@ import {
   Controller,
   Get,
   Post,
+  Put,
   Param,
   Res,
   NotFoundException,
@@ -15,6 +16,7 @@ import { join } from 'path';
 import { PagesService } from './pages.service';
 import { Page } from './interfaces/page.interface';
 import { CreatePageDto } from './dto/create-page.dto';
+import { UpdatePageDto } from './dto/update-page.dto';
 import { SnippetsService } from '../snippets/snippets.service';
 import { JwtAuthGuard } from '../auth/jwt.strategy';
 
@@ -32,12 +34,32 @@ export class PagesController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Get(':id')
+  async findOne(@Param('id') id: string, @Request() req): Promise<Page> {
+    const page = await this.pagesService.findOne(id, req.user.userId);
+    if (!page) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+    return page;
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Post()
   async create(
     @Body() createPageDto: CreatePageDto,
     @Request() req,
   ): Promise<Page> {
     return this.pagesService.create(createPageDto, req.user.userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Put(':id')
+  async update(
+    @Param('id') id: string,
+    @Body() updatePageDto: UpdatePageDto,
+    @Request() req,
+  ): Promise<Page> {
+    return this.pagesService.update(id, updatePageDto, req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard)

@@ -5,9 +5,16 @@ import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
 import { PagesModule } from './pages/pages.module';
 import { SnippetsModule } from './snippets/snippets.module';
+import { PaymentsModule } from './payments/payments.module';
 
 @Module({
-  imports: [AuthModule, UsersModule, PagesModule, SnippetsModule],
+  imports: [
+    AuthModule,
+    UsersModule,
+    PagesModule,
+    SnippetsModule,
+    PaymentsModule.forRootAsync(),
+  ],
   controllers: [AppController],
   providers: [AppService],
 })

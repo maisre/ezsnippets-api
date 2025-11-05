@@ -6,6 +6,11 @@ images:
     image: ez-api
     dockerfile: ./Dockerfile
     target: development
+  nestjs-view:
+    image: ez-view
+    dockerfile: ../ez-view/Dockerfile
+    context: ../ez-view
+    target: development
 
 deployments:
   ez-api:
@@ -13,6 +18,11 @@ deployments:
     kubectl:
       manifests:
         - k8s/
+  ez-view:
+    namespace: ez
+    kubectl:
+      manifests:
+        - ../ez-view/k8s/
 
 dev:
   nestjs-api:
@@ -49,3 +59,38 @@ dev:
       app: mongodb
     ports:
       - port: "27017"
+
+  redis:
+    namespace: ez
+    labelSelector:
+      app: redis
+    ports:
+      - port: "6379"
+
+  nestjs-view:
+    namespace: ez
+    labelSelector:
+      app: ez-view
+
+    ports:
+      - port: "3100"
+      - port: "9229"
+
+    sync:
+      - path: ../ez-view/src:/app/src
+        excludePaths:
+          - node_modules/
+        onUpload:
+          restartContainer: false
+
+      - path: ../ez-view/package.json:/app/package.json
+        file: true
+        onUpload:
+          exec:
+            - command: npm install
+
+      - path: ../ez-view/tsconfig.json:/app/tsconfig.json
+        file: true
+
+    open:
+      - url: http://localhost:3100

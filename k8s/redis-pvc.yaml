@@ -1,10 +1,10 @@
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: mongodb-pvc
+  name: redis-pvc
   labels:
-    app: mongodb
-    component: database
+    app: redis
+    component: cache
     tier: storage
 spec:
   accessModes:
@@ -12,4 +12,4 @@ spec:
   storageClassName: hostpath
   resources:
     requests:
-      storage: 10Gi
+      storage: 5Gi

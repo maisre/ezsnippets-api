@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodb-pvc
+  labels:
+    app: mongodb
+    component: database
+    tier: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: mongodb-local
+  resources:
+    requests:
+      storage: 10Gi

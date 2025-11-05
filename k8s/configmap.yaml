@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ez-api-config
+  labels:
+    app: ez-api
+    component: backend-config
+data:
+  # NestJS API server port
+  PORT: '3000'
+  # Node environment (development, production, test)
+  NODE_ENV: 'development'
+  # MongoDB connection string (connects to ez-mongodb-database container)
+  DATABASE_URL: 'mongodb://root:root@mongodb:27017/ez?authSource=admin'
+  # Increase Node.js heap size to prevent out-of-memory during TypeScript compilation
+  NODE_OPTIONS: '--max-old-space-size=768'

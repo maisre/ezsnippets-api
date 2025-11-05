@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ez-api
+  labels:
+    app: ez-api
+    component: nestjs-backend
+    tier: api
+spec:
+  type: ClusterIP
+  ports:
+  - port: 3000
+    targetPort: 3000
+    protocol: TCP
+    name: http
+  - port: 9229
+    targetPort: 9229
+    protocol: TCP
+    name: debug
+  selector:
+    app: ez-api

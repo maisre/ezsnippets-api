@@ -1,0 +1,16 @@
+images:
+    app:
+        imageConfigHash: 74c24f19c4bb4e305bfdfc7c8a8aa4b231080dbdd551c9e9ca7afd500ded8f71
+        dockerfileHash: 97125d57005b3d2fb40a784038e66d8b53ccf27d0f938e7058d8b7e59528ae07
+        contextHash: 21dca107b60fbc4a06a27716bc36d211e658fa0db034ba61829e6ef0e6861ddb
+        imageName: ez-api
+        tag: XnikJsi
+    nestjs-api:
+        imageConfigHash: d183f5547ffbdc39b56be16fb4be3ac74805581a5c886c48d759c92f32c2eedd
+        dockerfileHash: 97125d57005b3d2fb40a784038e66d8b53ccf27d0f938e7058d8b7e59528ae07
+        contextHash: 686423cdc6ca5ac8d52a2537d5e6890200feee37de38d553423affdea6393094
+        imageName: ez-api
+        tag: DSbVcXg
+lastContext:
+    namespace: ez
+    context: docker-desktop

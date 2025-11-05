@@ -48,6 +48,25 @@
             "request": "attach",
             "type": "chrome",
             "webRoot": "${workspaceFolder}"
+        },
+        {
+            "name": "Debug in DevSpace",
+            "type": "node",
+            "request": "attach",
+            "port": 9229,
+            "address": "localhost",
+            "restart": true,
+            "localRoot": "${workspaceFolder}",
+            "remoteRoot": "/app",
+            "skipFiles": [
+                "<node_internals>/**",
+                "node_modules/**"
+            ],
+            "sourceMaps": true,
+            "outFiles": [
+                "${workspaceFolder}/dist/**/*.js"
+            ],
+            "preLaunchTask": "devspace-dev"
         }
     ]
 }

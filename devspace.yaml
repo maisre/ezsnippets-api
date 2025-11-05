@@ -1,0 +1,51 @@
+version: v2beta1
+name: ez-api
+
+images:
+  nestjs-api:
+    image: ez-api
+    dockerfile: ./Dockerfile
+    target: development
+
+deployments:
+  ez-api:
+    namespace: ez
+    kubectl:
+      manifests:
+        - k8s/
+
+dev:
+  nestjs-api:
+    namespace: ez
+    labelSelector:
+      app: ez-api
+
+    ports:
+      - port: "3000"
+      - port: "9229"
+
+    sync:
+      - path: ./src:/app/src
+        excludePaths:
+          - node_modules/
+        onUpload:
+          restartContainer: false
+
+      - path: ./package.json:/app/package.json
+        file: true
+        onUpload:
+          exec:
+            - command: npm install
+
+      - path: ./tsconfig.json:/app/tsconfig.json
+        file: true
+
+    open:
+      - url: http://localhost:3000
+
+  mongodb:
+    namespace: ez
+    labelSelector:
+      app: mongodb
+    ports:
+      - port: "27017"

@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ez-api
+  labels:
+    app: ez-api
+    component: nestjs-backend
+    tier: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ez-api
+  template:
+    metadata:
+      labels:
+        app: ez-api
+    spec:
+      containers:
+      - name: ez-api-nestjs-backend
+        image: ez-api:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3000
+          name: http
+        - containerPort: 9229
+          name: debug
+        envFrom:
+        - configMapRef:
+            name: ez-api-config
+        - secretRef:
+            name: ez-api-secret
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 45
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3

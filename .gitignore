@@ -3,6 +3,7 @@
 /node_modules
 /build
 
+
 # Logs
 logs
 *.log
@@ -18,6 +19,7 @@ lerna-debug.log*
 # Tests
 /coverage
 /.nyc_output
+/.devspace
 
 # IDEs and editors
 /.idea

@@ -60,7 +60,11 @@ export class PagesService {
       updateData.snippets = updatePageDto.snippets;
 
     const updatedPage = await this.pageModel
-      .findOneAndUpdate({ _id: id, owner: userId }, updateData, { new: true })
+      .findOneAndUpdate(
+        { _id: id, owner: userId },
+        { $set: updateData },
+        { new: true },
+      )
       .exec();
 
     if (!updatedPage) {

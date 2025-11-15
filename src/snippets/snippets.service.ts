@@ -12,6 +12,10 @@ export class SnippetsService {
     return this.snippetModel.find().exec();
   }
 
+  async findAllSummary(): Promise<Snippet[]> {
+    return this.snippetModel.find().select('_id type').limit(200).exec();
+  }
+
   async findOne(id: string): Promise<Snippet | null> {
     if (!Types.ObjectId.isValid(id)) {
       return null;

@@ -7,7 +7,7 @@ export const LayoutSchema = new mongoose.Schema(
     name: { type: String, required: true },
     nav: { type: Object, required: false },
     footer: { type: Object, required: false },
-    pageContent: Array<SubPage>,
+    subPages: Array<SubPage>,
     owner: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

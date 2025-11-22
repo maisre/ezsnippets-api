@@ -6,7 +6,7 @@ export interface Layout extends Document {
   readonly name: string;
   readonly nav?: SnippetAbstract;
   readonly footer?: SnippetAbstract;
-  readonly pageContent: SubPage[];
+  readonly subPages: SubPage[];
   readonly owner: Types.ObjectId;
   readonly projectId?: string;
 }

@@ -36,7 +36,7 @@ export class LayoutsService {
       name: createLayoutDto.name,
       nav: createLayoutDto.nav,
       footer: createLayoutDto.footer,
-      pageContent: createLayoutDto.pageContent || [],
+      subPages: createLayoutDto.subPages || [],
       owner: new Types.ObjectId(ownerId),
     };
 
@@ -60,7 +60,7 @@ export class LayoutsService {
     if (updateLayoutDto.footer !== undefined)
       updateData.footer = updateLayoutDto.footer;
     if (updateLayoutDto.subPages !== undefined)
-      updateData.pageContent = updateLayoutDto.subPages;
+      updateData.subPages = updateLayoutDto.subPages;
 
     const updatedLayout = await this.layoutModel
       .findOneAndUpdate(

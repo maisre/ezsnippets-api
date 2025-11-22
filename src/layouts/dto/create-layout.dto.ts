@@ -23,7 +23,7 @@ export class CreateLayoutDto {
 
   @IsArray()
   @IsOptional()
-  pageContent?: SubPage[];
+  subPages?: SubPage[];
 
   @IsString()
   @IsOptional()

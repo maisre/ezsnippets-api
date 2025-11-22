@@ -54,11 +54,13 @@ export class LayoutsService {
     }
 
     const updateData: any = {};
-    if (updateLayoutDto.name !== undefined) updateData.name = updateLayoutDto.name;
+    if (updateLayoutDto.name !== undefined)
+      updateData.name = updateLayoutDto.name;
     if (updateLayoutDto.nav !== undefined) updateData.nav = updateLayoutDto.nav;
-    if (updateLayoutDto.footer !== undefined) updateData.footer = updateLayoutDto.footer;
-    if (updateLayoutDto.pageContent !== undefined)
-      updateData.pageContent = updateLayoutDto.pageContent;
+    if (updateLayoutDto.footer !== undefined)
+      updateData.footer = updateLayoutDto.footer;
+    if (updateLayoutDto.subPages !== undefined)
+      updateData.pageContent = updateLayoutDto.subPages;
 
     const updatedLayout = await this.layoutModel
       .findOneAndUpdate(
@@ -75,4 +77,3 @@ export class LayoutsService {
     return updatedLayout;
   }
 }
-

@@ -6,6 +6,8 @@ export const SnippetSchema = new mongoose.Schema(
     css: String,
     js: String,
     type: String,
+    textReplacement: Array<String>,
+    imageReplacement: Array<String>,
   },
   {
     toJSON: {

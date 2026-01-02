@@ -3,10 +3,14 @@ import { Model, Types } from 'mongoose';
 import { Page } from './interfaces/page.interface';
 import { CreatePageDto } from './dto/create-page.dto';
 import { UpdatePageDto } from './dto/update-page.dto';
+import { RedisPubSubService } from '../redis';
 
 @Injectable()
 export class PagesService {
-  constructor(@Inject('PAGES_MODEL') private readonly pageModel: Model<Page>) {}
+  constructor(
+    @Inject('PAGES_MODEL') private readonly pageModel: Model<Page>,
+    private pubsub: RedisPubSubService,
+  ) {}
 
   async findAll(): Promise<Page[]> {
     return this.pageModel.find().exec();
@@ -71,6 +75,10 @@ export class PagesService {
       throw new NotFoundException(`Page with id ${id} not found`);
     }
 
+    await this.pubsub.publish('page-updates', {
+      action: 'updated',
+      roomId: id,
+    });
     return updatedPage;
   }
 }

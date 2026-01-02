@@ -7,9 +7,11 @@ import { PagesModule } from './pages/pages.module';
 import { SnippetsModule } from './snippets/snippets.module';
 import { PaymentsModule } from './payments/payments.module';
 import { LayoutsModule } from './layouts/layouts.module';
+import { RedisModule } from './redis/redis.module';
 
 @Module({
   imports: [
+    RedisModule,
     AuthModule,
     UsersModule,
     PagesModule,

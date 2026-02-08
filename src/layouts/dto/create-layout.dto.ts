@@ -28,4 +28,12 @@ export class CreateLayoutDto {
   @IsString()
   @IsOptional()
   projectId?: string;
+
+  @IsString()
+  @IsOptional()
+  siteName?: string;
+
+  @IsString()
+  @IsOptional()
+  description?: string;
 }

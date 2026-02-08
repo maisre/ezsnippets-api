@@ -4,13 +4,17 @@ import { SnippetAbstract } from '../interfaces/snippet-abstract.interface';
 export const PageSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
+    siteName: { type: String, required: false },
+    description: { type: String, required: false },
+    aiCustomized: { type: Boolean, required: false, default: false },
     projectId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Project',
       required: false,
     },
     snippets: Array<SnippetAbstract>,
-    owner: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    org: { type: mongoose.Schema.Types.ObjectId, ref: 'org', required: true },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'user', required: false },
   },
   {
     toJSON: {

@@ -8,12 +8,30 @@ export class SnippetsService {
     @Inject('SNIPPETS_MODEL') private readonly snippetModel: Model<Snippet>,
   ) {}
 
-  async findAll(): Promise<Snippet[]> {
-    return this.snippetModel.find().exec();
+  async findAll(orgId?: string): Promise<Snippet[]> {
+    if (orgId) {
+      return this.snippetModel
+        .find({ $or: [{ org: { $exists: false } }, { org: null }, { org: orgId }] })
+        .exec();
+    }
+    return this.snippetModel
+      .find({ $or: [{ org: { $exists: false } }, { org: null }] })
+      .exec();
   }
 
-  async findAllSummary(): Promise<Snippet[]> {
-    return this.snippetModel.find().select('_id type').limit(200).exec();
+  async findAllSummary(orgId?: string): Promise<Snippet[]> {
+    if (orgId) {
+      return this.snippetModel
+        .find({ $or: [{ org: { $exists: false } }, { org: null }, { org: orgId }] })
+        .select('_id type')
+        .limit(200)
+        .exec();
+    }
+    return this.snippetModel
+      .find({ $or: [{ org: { $exists: false } }, { org: null }] })
+      .select('_id type')
+      .limit(200)
+      .exec();
   }
 
   async findOne(id: string): Promise<Snippet | null> {

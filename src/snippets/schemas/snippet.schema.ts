@@ -8,6 +8,8 @@ export const SnippetSchema = new mongoose.Schema(
     type: String,
     textReplacement: Array<String>,
     imageReplacement: Array<String>,
+    org: { type: mongoose.Schema.Types.ObjectId, ref: 'org', required: false },
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'user', required: false },
   },
   {
     toJSON: {

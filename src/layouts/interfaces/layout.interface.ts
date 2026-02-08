@@ -4,9 +4,13 @@ import { SnippetAbstract } from '../../pages/interfaces/snippet-abstract.interfa
 
 export interface Layout extends Document {
   readonly name: string;
+  readonly siteName?: string;
+  readonly description?: string;
+  readonly aiCustomized?: boolean;
   readonly nav?: SnippetAbstract;
   readonly footer?: SnippetAbstract;
   readonly subPages: SubPage[];
-  readonly owner: Types.ObjectId;
+  readonly org: Types.ObjectId;
+  readonly createdBy?: Types.ObjectId;
   readonly projectId?: string;
 }

@@ -8,6 +8,14 @@ export class CreatePageDto {
 
   @IsString()
   @IsOptional()
+  siteName?: string;
+
+  @IsString()
+  @IsOptional()
+  description?: string;
+
+  @IsString()
+  @IsOptional()
   projectId?: string;
 
   @IsArray()

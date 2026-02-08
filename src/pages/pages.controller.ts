@@ -30,13 +30,13 @@ export class PagesController {
   @UseGuards(JwtAuthGuard)
   @Get()
   async findAll(@Request() req): Promise<Page[]> {
-    return this.pagesService.findForOwner(req.user.userId);
+    return this.pagesService.findForOrg(req.user.activeOrg);
   }
 
   @UseGuards(JwtAuthGuard)
   @Get(':id')
   async findOne(@Param('id') id: string, @Request() req): Promise<Page> {
-    const page = await this.pagesService.findOne(id, req.user.userId);
+    const page = await this.pagesService.findOne(id, req.user.activeOrg);
     if (!page) {
       throw new NotFoundException(`Page with id ${id} not found`);
     }
@@ -49,7 +49,7 @@ export class PagesController {
     @Body() createPageDto: CreatePageDto,
     @Request() req,
   ): Promise<Page> {
-    return this.pagesService.create(createPageDto, req.user.userId);
+    return this.pagesService.create(createPageDto, req.user.activeOrg, req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -59,7 +59,7 @@ export class PagesController {
     @Body() updatePageDto: UpdatePageDto,
     @Request() req,
   ): Promise<Page> {
-    return this.pagesService.update(id, updatePageDto, req.user.userId);
+    return this.pagesService.update(id, updatePageDto, req.user.activeOrg);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -69,7 +69,7 @@ export class PagesController {
     @Request() req,
     @Res() res: Response,
   ) {
-    const page = await this.pagesService.findOne(id, req.user.userId);
+    const page = await this.pagesService.findOne(id, req.user.activeOrg);
 
     if (!page) {
       throw new NotFoundException(`Page with id ${id} not found`);

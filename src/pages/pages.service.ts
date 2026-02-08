@@ -16,27 +16,30 @@ export class PagesService {
     return this.pageModel.find().exec();
   }
 
-  async findOne(id: string, userId: string): Promise<Page | null> {
-    if (!Types.ObjectId.isValid(id) || !Types.ObjectId.isValid(userId)) {
+  async findOne(id: string, orgId: string): Promise<Page | null> {
+    if (!Types.ObjectId.isValid(id) || !Types.ObjectId.isValid(orgId)) {
       return null;
     }
-    return this.pageModel.findOne({ _id: id, owner: userId }).exec();
+    return this.pageModel.findOne({ _id: id, org: orgId }).exec();
   }
 
-  async findForOwner(ownerId: string): Promise<Page[]> {
-    if (!Types.ObjectId.isValid(ownerId)) {
+  async findForOrg(orgId: string): Promise<Page[]> {
+    if (!Types.ObjectId.isValid(orgId)) {
       return [];
     }
-    return this.pageModel.find({ owner: ownerId }).exec();
+    return this.pageModel.find({ org: orgId }).exec();
   }
 
-  async create(createPageDto: CreatePageDto, ownerId: string): Promise<Page> {
+  async create(createPageDto: CreatePageDto, orgId: string, userId: string): Promise<Page> {
     const pageData = {
       name: createPageDto.name,
+      siteName: createPageDto.siteName,
+      description: createPageDto.description,
       projectId: createPageDto.projectId
         ? new Types.ObjectId(createPageDto.projectId)
         : undefined,
-      owner: new Types.ObjectId(ownerId),
+      org: new Types.ObjectId(orgId),
+      createdBy: new Types.ObjectId(userId),
       snippets: createPageDto.snippets || [],
     };
 
@@ -47,25 +50,48 @@ export class PagesService {
   async update(
     id: string,
     updatePageDto: UpdatePageDto,
-    userId: string,
+    orgId: string,
   ): Promise<Page> {
-    if (!Types.ObjectId.isValid(id) || !Types.ObjectId.isValid(userId)) {
+    if (!Types.ObjectId.isValid(id) || !Types.ObjectId.isValid(orgId)) {
       throw new NotFoundException(`Page with id ${id} not found`);
     }
 
     const updateData: any = {};
     if (updatePageDto.name !== undefined) updateData.name = updatePageDto.name;
+    if (updatePageDto.siteName !== undefined)
+      updateData.siteName = updatePageDto.siteName;
+    if (updatePageDto.description !== undefined)
+      updateData.description = updatePageDto.description;
+    if (updatePageDto.aiCustomized !== undefined)
+      updateData.aiCustomized = updatePageDto.aiCustomized;
     if (updatePageDto.projectId !== undefined) {
       updateData.projectId = updatePageDto.projectId
         ? new Types.ObjectId(updatePageDto.projectId)
         : undefined;
     }
-    if (updatePageDto.snippets !== undefined)
+    if (updatePageDto.snippets !== undefined) {
       updateData.snippets = updatePageDto.snippets;
+
+      // Reset aiCustomized if new snippets were added
+      const currentPage = await this.pageModel
+        .findOne({ _id: id, org: orgId })
+        .exec();
+      if (currentPage) {
+        const currentIds = new Set(
+          currentPage.snippets.map((s: any) => String(s.id)),
+        );
+        const hasNewSnippets = updatePageDto.snippets.some(
+          (s: any) => !currentIds.has(String(s.id)),
+        );
+        if (hasNewSnippets) {
+          updateData.aiCustomized = false;
+        }
+      }
+    }
 
     const updatedPage = await this.pageModel
       .findOneAndUpdate(
-        { _id: id, owner: userId },
+        { _id: id, org: orgId },
         { $set: updateData },
         { new: true },
       )

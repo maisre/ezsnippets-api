@@ -22,13 +22,13 @@ export class LayoutsController {
   @UseGuards(JwtAuthGuard)
   @Get()
   async findAll(@Request() req): Promise<Layout[]> {
-    return this.layoutsService.findForOwner(req.user.userId);
+    return this.layoutsService.findForOrg(req.user.activeOrg);
   }
 
   @UseGuards(JwtAuthGuard)
   @Get(':id')
   async findOne(@Param('id') id: string, @Request() req): Promise<Layout> {
-    const layout = await this.layoutsService.findOne(id, req.user.userId);
+    const layout = await this.layoutsService.findOne(id, req.user.activeOrg);
     if (!layout) {
       throw new NotFoundException(`Layout with id ${id} not found`);
     }
@@ -41,7 +41,7 @@ export class LayoutsController {
     @Body() createLayoutDto: CreateLayoutDto,
     @Request() req,
   ): Promise<Layout> {
-    return this.layoutsService.create(createLayoutDto, req.user.userId);
+    return this.layoutsService.create(createLayoutDto, req.user.activeOrg, req.user.userId);
   }
 
   @UseGuards(JwtAuthGuard)
@@ -51,7 +51,7 @@ export class LayoutsController {
     @Body() updateLayoutDto: UpdateLayoutDto,
     @Request() req,
   ): Promise<Layout> {
-    return this.layoutsService.update(id, updateLayoutDto, req.user.userId);
+    return this.layoutsService.update(id, updateLayoutDto, req.user.activeOrg);
   }
 }
 

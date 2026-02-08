@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Res, NotFoundException } from '@nestjs/common';
+import { Controller, Get, Param, Query, Res, NotFoundException } from '@nestjs/common';
 import type { Response } from 'express';
 import { readFileSync } from 'fs';
 import { join } from 'path';
@@ -10,13 +10,13 @@ export class SnippetsController {
   constructor(private readonly snippetsService: SnippetsService) {}
 
   @Get()
-  async findAll(): Promise<Snippet[]> {
-    return this.snippetsService.findAll();
+  async findAll(@Query('orgId') orgId?: string): Promise<Snippet[]> {
+    return this.snippetsService.findAll(orgId);
   }
 
   @Get('summary')
-  async allSummary(): Promise<Snippet[]> {
-    return this.snippetsService.findAllSummary();
+  async allSummary(@Query('orgId') orgId?: string): Promise<Snippet[]> {
+    return this.snippetsService.findAllSummary(orgId);
   }
 
   @Get(':id')

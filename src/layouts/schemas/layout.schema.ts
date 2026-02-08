@@ -5,13 +5,21 @@ import { SnippetAbstract } from '../../pages/interfaces/snippet-abstract.interfa
 export const LayoutSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
+    siteName: { type: String, required: false },
+    description: { type: String, required: false },
+    aiCustomized: { type: Boolean, required: false, default: false },
     nav: { type: Object, required: false },
     footer: { type: Object, required: false },
     subPages: Array<SubPage>,
-    owner: {
+    org: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      ref: 'org',
       required: true,
+    },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'user',
+      required: false,
     },
   },
   {

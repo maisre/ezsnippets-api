@@ -8,6 +8,7 @@ import { SnippetsModule } from './snippets/snippets.module';
 import { PaymentsModule } from './payments/payments.module';
 import { LayoutsModule } from './layouts/layouts.module';
 import { RedisModule } from './redis/redis.module';
+import { OrgsModule } from './orgs/orgs.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { RedisModule } from './redis/redis.module';
     SnippetsModule,
     PaymentsModule.forRootAsync(),
     LayoutsModule,
+    OrgsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

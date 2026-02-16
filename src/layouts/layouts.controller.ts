@@ -53,5 +53,14 @@ export class LayoutsController {
   ): Promise<Layout> {
     return this.layoutsService.update(id, updateLayoutDto, req.user.activeOrg);
   }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/customize')
+  async customize(
+    @Param('id') id: string,
+    @Request() req,
+  ): Promise<Layout> {
+    return this.layoutsService.customize(id, req.user.activeOrg);
+  }
 }
 

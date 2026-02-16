@@ -6,7 +6,6 @@ export const PageSchema = new mongoose.Schema(
     name: { type: String, required: true },
     siteName: { type: String, required: false },
     description: { type: String, required: false },
-    aiCustomized: { type: Boolean, required: false, default: false },
     projectId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Project',

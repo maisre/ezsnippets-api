@@ -63,6 +63,15 @@ export class PagesController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Post(':id/customize')
+  async customize(
+    @Param('id') id: string,
+    @Request() req,
+  ): Promise<Page> {
+    return this.pagesService.customize(id, req.user.activeOrg);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Get('view/:id')
   async viewPage(
     @Param('id') id: string,

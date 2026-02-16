@@ -5,4 +5,9 @@ export interface SnippetAbstract extends Document {
   readonly cssOverride: String;
   readonly jsOverride: String;
   readonly htmlOverride: {};
+  readonly textReplacementOverride?: Array<{
+    token: string;
+    replacement: string;
+  }>;
+  readonly aiCustomized?: boolean;
 }

@@ -3,11 +3,15 @@ import { Model, Types } from 'mongoose';
 import { Layout } from './interfaces/layout.interface';
 import { CreateLayoutDto } from './dto/create-layout.dto';
 import { UpdateLayoutDto } from './dto/update-layout.dto';
+import { OpenaiService } from '../openai';
+import { SnippetsService } from '../snippets/snippets.service';
 
 @Injectable()
 export class LayoutsService {
   constructor(
     @Inject('LAYOUTS_MODEL') private readonly layoutModel: Model<Layout>,
+    private readonly openaiService: OpenaiService,
+    private readonly snippetsService: SnippetsService,
   ) {}
 
   async findAll(): Promise<Layout[]> {
@@ -64,69 +68,141 @@ export class LayoutsService {
       updateData.siteName = updateLayoutDto.siteName;
     if (updateLayoutDto.description !== undefined)
       updateData.description = updateLayoutDto.description;
-    if (updateLayoutDto.aiCustomized !== undefined)
-      updateData.aiCustomized = updateLayoutDto.aiCustomized;
     if (updateLayoutDto.nav !== undefined) updateData.nav = updateLayoutDto.nav;
     if (updateLayoutDto.footer !== undefined)
       updateData.footer = updateLayoutDto.footer;
     if (updateLayoutDto.subPages !== undefined)
       updateData.subPages = updateLayoutDto.subPages;
 
-    // Reset aiCustomized if new snippets were added to nav, footer, or subPages
-    const contentUpdated =
-      updateLayoutDto.nav !== undefined ||
-      updateLayoutDto.footer !== undefined ||
-      updateLayoutDto.subPages !== undefined;
+    const updatedLayout = await this.layoutModel
+      .findOneAndUpdate(
+        { _id: id, org: orgId },
+        { $set: updateData },
+        { new: true },
+      )
+      .exec();
 
-    if (contentUpdated) {
-      const currentLayout = await this.layoutModel
-        .findOne({ _id: id, org: orgId })
-        .exec();
-      if (currentLayout) {
-        const currentIds = new Set<string>();
-        if ((currentLayout.nav as any)?.id)
-          currentIds.add(String((currentLayout.nav as any).id));
-        if ((currentLayout.footer as any)?.id)
-          currentIds.add(String((currentLayout.footer as any).id));
-        if (currentLayout.subPages) {
-          for (const sp of currentLayout.subPages) {
-            for (const s of sp.snippets || []) {
-              currentIds.add(String((s as any).id));
-            }
-          }
-        }
+    if (!updatedLayout) {
+      throw new NotFoundException(`Layout with id ${id} not found`);
+    }
 
-        let hasNewSnippets = false;
-        if (
-          updateLayoutDto.nav &&
-          (updateLayoutDto.nav as any).id &&
-          !currentIds.has(String((updateLayoutDto.nav as any).id))
-        ) {
-          hasNewSnippets = true;
-        }
-        if (
-          updateLayoutDto.footer &&
-          (updateLayoutDto.footer as any).id &&
-          !currentIds.has(String((updateLayoutDto.footer as any).id))
-        ) {
-          hasNewSnippets = true;
-        }
-        if (updateLayoutDto.subPages) {
-          for (const sp of updateLayoutDto.subPages) {
-            for (const s of sp.snippets || []) {
-              if (!currentIds.has(String((s as any).id))) {
-                hasNewSnippets = true;
-                break;
-              }
-            }
-            if (hasNewSnippets) break;
-          }
-        }
+    return updatedLayout;
+  }
 
-        if (hasNewSnippets) {
-          updateData.aiCustomized = false;
-        }
+  async customize(id: string, orgId: string): Promise<Layout> {
+    const layout = await this.findOne(id, orgId);
+    if (!layout) {
+      throw new NotFoundException(`Layout with id ${id} not found`);
+    }
+
+    // Gather all snippet references from nav, footer, and subPages
+    const allSnippetRefs: Array<{ ref: any; path: string; index?: number; subIndex?: number }> = [];
+
+    if ((layout.nav as any)?.id) {
+      allSnippetRefs.push({ ref: layout.nav, path: 'nav' });
+    }
+    if ((layout.footer as any)?.id) {
+      allSnippetRefs.push({ ref: layout.footer, path: 'footer' });
+    }
+    if (layout.subPages) {
+      layout.subPages.forEach((sp: any, spIdx: number) => {
+        (sp.snippets || []).forEach((s: any, sIdx: number) => {
+          allSnippetRefs.push({ ref: s, path: 'subPage', index: spIdx, subIndex: sIdx });
+        });
+      });
+    }
+
+    // Load all snippet documents
+    const snippetDocs = await Promise.all(
+      allSnippetRefs.map((entry) =>
+        this.snippetsService.findOne(String(entry.ref.id)),
+      ),
+    );
+
+    // Build input: only snippets with textReplacement
+    const validSnippets = snippetDocs.filter(
+      (s): s is NonNullable<typeof s> =>
+        s != null && !!s.textReplacement && s.textReplacement.length > 0,
+    );
+    const snippetsInput = validSnippets.map((s) => ({
+      snippetId: String(s._id),
+      replacements: s.textReplacement!.map((tr: any) => ({
+        token: tr.token,
+        original: tr.original || tr.replacement || '',
+      })),
+    }));
+
+    // Helper to mark a snippet abstract as customized
+    const markCustomized = (ref: any) => {
+      const obj = ref.toObject ? ref.toObject() : { ...ref };
+      obj.aiCustomized = true;
+      return obj;
+    };
+
+    if (snippetsInput.length === 0) {
+      // No text replacements — just mark all snippet abstracts as customized
+      const updateData: any = {};
+      if ((layout.nav as any)?.id) {
+        updateData.nav = markCustomized(layout.nav);
       }
+      if ((layout.footer as any)?.id) {
+        updateData.footer = markCustomized(layout.footer);
+      }
+      if (layout.subPages) {
+        updateData.subPages = layout.subPages.map((sp: any) => {
+          const spObj = sp.toObject ? sp.toObject() : { ...sp };
+          spObj.snippets = (sp.snippets || []).map((s: any) => markCustomized(s));
+          return spObj;
+        });
+      }
+
+      const updatedLayout = await this.layoutModel
+        .findOneAndUpdate(
+          { _id: id, org: orgId },
+          { $set: updateData },
+          { new: true },
+        )
+        .exec();
+      if (!updatedLayout) {
+        throw new NotFoundException(`Layout with id ${id} not found`);
+      }
+      return updatedLayout;
+    }
+
+    const result = await this.openaiService.customizeContent({
+      name: layout.name,
+      siteName: layout.siteName,
+      description: layout.description,
+      snippets: snippetsInput,
+    });
+
+    // Build update data with overrides applied and aiCustomized set
+    const applyOverride = (ref: any) => {
+      const obj = ref.toObject ? ref.toObject() : { ...ref };
+      const snippetResult = result.snippets.find(
+        (rs) => rs.snippetId === String(ref.id),
+      );
+      if (snippetResult) {
+        obj.textReplacementOverride = snippetResult.replacements;
+      }
+      obj.aiCustomized = true;
+      return obj;
+    };
+
+    const updateData: any = {};
+
+    if ((layout.nav as any)?.id) {
+      updateData.nav = applyOverride(layout.nav);
+    }
+    if ((layout.footer as any)?.id) {
+      updateData.footer = applyOverride(layout.footer);
+    }
+    if (layout.subPages) {
+      updateData.subPages = layout.subPages.map((sp: any) => {
+        const spObj = sp.toObject ? sp.toObject() : { ...sp };
+        spObj.snippets = (sp.snippets || []).map((s: any) => applyOverride(s));
+        return spObj;
+      });
     }
 
     const updatedLayout = await this.layoutModel

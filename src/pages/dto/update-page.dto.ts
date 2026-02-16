@@ -1,4 +1,4 @@
-import { IsArray, IsBoolean, IsOptional, IsString, IsNotEmpty } from 'class-validator';
+import { IsArray, IsOptional, IsString } from 'class-validator';
 import { SnippetAbstract } from '../interfaces/snippet-abstract.interface';
 
 export class UpdatePageDto {
@@ -13,10 +13,6 @@ export class UpdatePageDto {
   @IsString()
   @IsOptional()
   description?: string;
-
-  @IsBoolean()
-  @IsOptional()
-  aiCustomized?: boolean;
 
   @IsString()
   @IsOptional()

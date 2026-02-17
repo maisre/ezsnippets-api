@@ -6,6 +6,7 @@ export const SnippetSchema = new mongoose.Schema(
     css: String,
     js: String,
     type: String,
+    tags: [String],
     textReplacement: Array<String>,
     imageReplacement: Array<String>,
     org: { type: mongoose.Schema.Types.ObjectId, ref: 'org', required: false },

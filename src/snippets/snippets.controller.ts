@@ -19,6 +19,11 @@ export class SnippetsController {
     return this.snippetsService.findAllSummary(orgId);
   }
 
+  @Get('filters')
+  async getFilters(@Query('orgId') orgId?: string) {
+    return this.snippetsService.getFilters(orgId);
+  }
+
   @Get(':id')
   async findOne(@Param('id') id: string): Promise<Snippet | null> {
     console.log('got here', id);

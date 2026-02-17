@@ -5,6 +5,7 @@ export interface Snippet extends Document {
   readonly css: String;
   readonly js: String;
   readonly type: String;
+  readonly tags?: string[];
   readonly textReplacement?: Array<{
     token: string;
     replacement: string;

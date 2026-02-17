@@ -23,15 +23,31 @@ export class SnippetsService {
     if (orgId) {
       return this.snippetModel
         .find({ $or: [{ org: { $exists: false } }, { org: null }, { org: orgId }] })
-        .select('_id type')
+        .select('_id type tags')
         .limit(200)
         .exec();
     }
     return this.snippetModel
       .find({ $or: [{ org: { $exists: false } }, { org: null }] })
-      .select('_id type')
+      .select('_id type tags')
       .limit(200)
       .exec();
+  }
+
+  async getFilters(orgId?: string): Promise<{ types: string[]; tags: string[] }> {
+    const filter = orgId
+      ? { $or: [{ org: { $exists: false } }, { org: null }, { org: orgId }] }
+      : { $or: [{ org: { $exists: false } }, { org: null }] };
+
+    const [types, tags] = await Promise.all([
+      this.snippetModel.distinct('type', filter).exec(),
+      this.snippetModel.distinct('tags', filter).exec(),
+    ]);
+
+    return {
+      types: types.filter(Boolean).map(String).sort(),
+      tags: tags.filter(Boolean).map(String).sort(),
+    };
   }
 
   async findOne(id: string): Promise<Snippet | null> {

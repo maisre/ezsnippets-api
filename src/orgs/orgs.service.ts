@@ -35,4 +35,20 @@ export class OrgsService {
       .exec();
     return !!org;
   }
+
+  async updateSubscription(
+    orgId: string,
+    data: {
+      stripeCustomerId?: string;
+      subscriptionId?: string;
+      plan?: string;
+      subscriptionStatus?: string;
+    },
+  ): Promise<Org | null> {
+    return this.orgModel.findByIdAndUpdate(orgId, data, { new: true }).exec();
+  }
+
+  async findByStripeCustomerId(customerId: string): Promise<Org | null> {
+    return this.orgModel.findOne({ stripeCustomerId: customerId }).exec();
+  }
 }

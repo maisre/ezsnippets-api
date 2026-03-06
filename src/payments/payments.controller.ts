@@ -1,9 +1,41 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Post,
+  RawBody,
+  Request,
+  UseGuards,
+} from '@nestjs/common';
 import { PaymentsService } from './payments.service';
+import { JwtAuthGuard } from '../auth/jwt.strategy';
 
 @Controller('payments')
 export class PaymentsController {
   constructor(private readonly paymentService: PaymentsService) {}
+
+  @UseGuards(JwtAuthGuard)
+  @Post('checkout')
+  async createCheckoutSession(
+    @Request() req,
+    @Body() body: { priceId: string; successUrl: string; cancelUrl: string },
+  ) {
+    return this.paymentService.createCheckoutSession(
+      req.user.activeOrg,
+      body.priceId,
+      body.successUrl,
+      body.cancelUrl,
+    );
+  }
+
+  @Post('webhook')
+  async handleWebhook(
+    @Headers('stripe-signature') signature: string,
+    @RawBody() payload: Buffer,
+  ) {
+    return this.paymentService.handleWebhook(signature, payload);
+  }
 
   @Get('products')
   async getProducts() {

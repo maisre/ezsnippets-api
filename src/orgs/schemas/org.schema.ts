@@ -18,6 +18,10 @@ export const OrgSchema = new mongoose.Schema(
         },
       },
     ],
+    stripeCustomerId: { type: String },
+    subscriptionId: { type: String },
+    plan: { type: String },
+    subscriptionStatus: { type: String },
   },
   {
     toJSON: {

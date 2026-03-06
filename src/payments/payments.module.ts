@@ -2,6 +2,7 @@ import { DynamicModule, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
+import { OrgsModule } from '../orgs/orgs.module';
 
 @Module({})
 export class PaymentsModule {
@@ -9,7 +10,7 @@ export class PaymentsModule {
     return {
       module: PaymentsModule,
       controllers: [PaymentsController],
-      imports: [ConfigModule.forRoot()],
+      imports: [ConfigModule.forRoot(), OrgsModule],
       providers: [
         PaymentsService,
         {

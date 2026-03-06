@@ -9,9 +9,11 @@ import { PaymentsModule } from './payments/payments.module';
 import { LayoutsModule } from './layouts/layouts.module';
 import { RedisModule } from './redis/redis.module';
 import { OrgsModule } from './orgs/orgs.module';
+import { SqsModule } from './sqs/sqs.module';
 
 @Module({
   imports: [
+    SqsModule,
     RedisModule,
     AuthModule,
     UsersModule,

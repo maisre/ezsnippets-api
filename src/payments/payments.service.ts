@@ -1,4 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { OrgsService } from '../orgs/orgs.service';
 import Stripe from 'stripe';
 
 @Injectable()
@@ -9,9 +10,10 @@ export class PaymentsService {
   constructor(
     @Inject('STRIPE_API_KEY')
     private readonly apiKey: string,
+    private readonly orgsService: OrgsService,
   ) {
     this.stripe = new Stripe(this.apiKey, {
-      apiVersion: '2025-09-30.clover', // Use latest API version, or "null" for your default
+      apiVersion: '2025-09-30.clover',
     });
   }
 
@@ -156,6 +158,110 @@ export class PaymentsService {
     } catch (error) {
       this.logger.error('Failed to retrieve balance', error.stack);
       throw error;
+    }
+  }
+
+  // Checkout Session
+  async createCheckoutSession(
+    orgId: string,
+    priceId: string,
+    successUrl: string,
+    cancelUrl: string,
+  ): Promise<{ url: string | null }> {
+    const org = await this.orgsService.findOne(orgId);
+    if (!org) throw new Error('Organization not found');
+
+    let customerId = org.stripeCustomerId;
+
+    if (!customerId) {
+      const customer = await this.stripe.customers.create({
+        metadata: { orgId },
+      });
+      customerId = customer.id;
+      await this.orgsService.updateSubscription(orgId, {
+        stripeCustomerId: customerId,
+      });
+    }
+
+    const session = await this.stripe.checkout.sessions.create({
+      customer: customerId,
+      mode: 'subscription',
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+    });
+
+    this.logger.log(`Checkout session created for org ${orgId}`);
+    return { url: session.url };
+  }
+
+  // Webhook
+  async handleWebhook(signature: string, payload: Buffer): Promise<void> {
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    let event: Stripe.Event;
+
+    if (webhookSecret) {
+      event = this.stripe.webhooks.constructEvent(
+        payload,
+        signature,
+        webhookSecret,
+      );
+    } else {
+      event = JSON.parse(payload.toString()) as Stripe.Event;
+      this.logger.warn(
+        'No STRIPE_WEBHOOK_SECRET set — skipping signature verification',
+      );
+    }
+
+    switch (event.type) {
+      case 'checkout.session.completed': {
+        const session = event.data.object as Stripe.Checkout.Session;
+        if (session.mode === 'subscription' && session.customer) {
+          const customerId =
+            typeof session.customer === 'string'
+              ? session.customer
+              : session.customer.id;
+          const subscriptionId =
+            typeof session.subscription === 'string'
+              ? session.subscription
+              : session.subscription?.id;
+
+          const org =
+            await this.orgsService.findByStripeCustomerId(customerId);
+          if (org && subscriptionId) {
+            const subscription =
+              await this.stripe.subscriptions.retrieve(subscriptionId);
+            const priceId = subscription.items.data[0]?.price?.id;
+
+            await this.orgsService.updateSubscription(org.id, {
+              subscriptionId,
+              plan: priceId,
+              subscriptionStatus: subscription.status,
+            });
+            this.logger.log(`Subscription activated for org ${org.id}`);
+          }
+        }
+        break;
+      }
+      case 'customer.subscription.updated':
+      case 'customer.subscription.deleted': {
+        const subscription = event.data.object as Stripe.Subscription;
+        const customerId =
+          typeof subscription.customer === 'string'
+            ? subscription.customer
+            : subscription.customer.id;
+
+        const org = await this.orgsService.findByStripeCustomerId(customerId);
+        if (org) {
+          await this.orgsService.updateSubscription(org.id, {
+            subscriptionStatus: subscription.status,
+          });
+          this.logger.log(
+            `Subscription ${subscription.status} for org ${org.id}`,
+          );
+        }
+        break;
+      }
     }
   }
 

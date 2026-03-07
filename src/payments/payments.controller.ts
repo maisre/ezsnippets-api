@@ -29,6 +29,12 @@ export class PaymentsController {
     );
   }
 
+  @UseGuards(JwtAuthGuard)
+  @Post('cancel-subscription')
+  async cancelSubscription(@Request() req) {
+    return this.paymentService.cancelSubscription(req.user.activeOrg);
+  }
+
   @Post('webhook')
   async handleWebhook(
     @Headers('stripe-signature') signature: string,

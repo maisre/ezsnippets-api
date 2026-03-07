@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { UsersModule } from '../users/users.module';
 import { OrgsModule } from '../orgs/orgs.module';
@@ -10,6 +11,7 @@ import { JwtStrategy } from './jwt.strategy';
 
 @Module({
   imports: [
+    ConfigModule.forRoot(),
     UsersModule,
     OrgsModule,
     PassportModule,
@@ -18,7 +20,17 @@ import { JwtStrategy } from './jwt.strategy';
       signOptions: { expiresIn: '14d' },
     }),
   ],
-  providers: [AuthService, LocalStrategy, JwtStrategy],
+  providers: [
+    AuthService,
+    LocalStrategy,
+    JwtStrategy,
+    {
+      provide: 'EMAIL_QUEUE_URL',
+      useFactory: (configService: ConfigService) =>
+        configService.get('EMAIL_QUEUE_URL'),
+      inject: [ConfigService],
+    },
+  ],
   exports: [AuthService],
 })
 export class AuthModule {}

@@ -1,16 +1,14 @@
-import { Injectable, ConflictException } from '@nestjs/common';
+import { Inject, Injectable, ConflictException } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { OrgsService } from '../orgs/orgs.service';
 import { SqsService } from '../sqs/sqs.service';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 
-const EMAIL_QUEUE_URL =
-  'https://sqs.us-east-1.amazonaws.com/949174740567/dev-email';
-
 @Injectable()
 export class AuthService {
   constructor(
+    @Inject('EMAIL_QUEUE_URL') private readonly emailQueueUrl: string,
     private usersService: UsersService,
     private orgsService: OrgsService,
     private jwtService: JwtService,
@@ -58,7 +56,7 @@ export class AuthService {
       activeOrg: org._id,
     };
 
-    await this.sqsService.sendMessage(EMAIL_QUEUE_URL, {
+    await this.sqsService.sendMessage(this.emailQueueUrl, {
       type: 'welcome_email',
       userId: String(user._id),
       username: user.username,

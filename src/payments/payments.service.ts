@@ -1,5 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { OrgsService } from '../orgs/orgs.service';
+import { SqsService } from '../sqs/sqs.service';
 import Stripe from 'stripe';
 
 @Injectable()
@@ -8,9 +9,11 @@ export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
 
   constructor(
-    @Inject('STRIPE_API_KEY')
-    private readonly apiKey: string,
+    @Inject('STRIPE_API_KEY') private readonly apiKey: string,
+    @Inject('STRIPE_WEBHOOK_SECRET') private readonly webhookSecret: string,
+    @Inject('EMAIL_QUEUE_URL') private readonly emailQueueUrl: string,
     private readonly orgsService: OrgsService,
+    private readonly sqsService: SqsService,
   ) {
     this.stripe = new Stripe(this.apiKey, {
       apiVersion: '2025-09-30.clover',
@@ -197,14 +200,13 @@ export class PaymentsService {
 
   // Webhook
   async handleWebhook(signature: string, payload: Buffer): Promise<void> {
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
     let event: Stripe.Event;
 
-    if (webhookSecret) {
+    if (this.webhookSecret) {
       event = this.stripe.webhooks.constructEvent(
         payload,
         signature,
-        webhookSecret,
+        this.webhookSecret,
       );
     } else {
       event = JSON.parse(payload.toString()) as Stripe.Event;
@@ -238,13 +240,20 @@ export class PaymentsService {
               plan: priceId,
               subscriptionStatus: subscription.status,
             });
+
+            await this.sqsService.sendMessage(this.emailQueueUrl, {
+              type: 'subscription_confirmed',
+              orgId: org.id,
+              orgName: org.name,
+              plan: this.getPlanName(priceId),
+            });
+
             this.logger.log(`Subscription activated for org ${org.id}`);
           }
         }
         break;
       }
-      case 'customer.subscription.updated':
-      case 'customer.subscription.deleted': {
+      case 'customer.subscription.updated': {
         const subscription = event.data.object as Stripe.Subscription;
         const customerId =
           typeof subscription.customer === 'string'
@@ -262,7 +271,122 @@ export class PaymentsService {
         }
         break;
       }
+      case 'customer.subscription.deleted': {
+        const subscription = event.data.object as Stripe.Subscription;
+        const customerId =
+          typeof subscription.customer === 'string'
+            ? subscription.customer
+            : subscription.customer.id;
+
+        const org = await this.orgsService.findByStripeCustomerId(customerId);
+        if (org) {
+          const priceId = subscription.items.data[0]?.price?.id;
+          await this.orgsService.updateSubscription(org.id, {
+            subscriptionStatus: subscription.status,
+          });
+
+          await this.sqsService.sendMessage(this.emailQueueUrl, {
+            type: 'subscription_expired',
+            orgId: org.id,
+            orgName: org.name,
+            plan: this.getPlanName(priceId),
+          });
+
+          this.logger.log(`Subscription deleted for org ${org.id}`);
+        }
+        break;
+      }
+      case 'invoice.payment_succeeded': {
+        const invoice = event.data.object as Stripe.Invoice;
+        if (invoice.billing_reason === 'subscription_cycle') {
+          const customerId =
+            typeof invoice.customer === 'string'
+              ? invoice.customer
+              : invoice.customer?.id;
+
+          if (customerId) {
+            const org =
+              await this.orgsService.findByStripeCustomerId(customerId);
+            if (org) {
+              await this.sqsService.sendMessage(this.emailQueueUrl, {
+                type: 'payment_succeeded',
+                orgId: org.id,
+                orgName: org.name,
+                plan: this.getPlanName(org.plan),
+                amountPaid: (invoice.amount_paid / 100).toFixed(2),
+                currency: invoice.currency,
+              });
+
+              this.logger.log(`Payment succeeded for org ${org.id}`);
+            }
+          }
+        }
+        break;
+      }
+      case 'invoice.payment_failed': {
+        const invoice = event.data.object as Stripe.Invoice;
+        const customerId =
+          typeof invoice.customer === 'string'
+            ? invoice.customer
+            : invoice.customer?.id;
+
+        if (customerId) {
+          const org =
+            await this.orgsService.findByStripeCustomerId(customerId);
+          if (org) {
+            await this.sqsService.sendMessage(this.emailQueueUrl, {
+              type: 'payment_failed',
+              orgId: org.id,
+              orgName: org.name,
+              plan: this.getPlanName(org.plan),
+              amountDue: (invoice.amount_due / 100).toFixed(2),
+              currency: invoice.currency,
+            });
+
+            this.logger.log(`Payment failed for org ${org.id}`);
+          }
+        }
+        break;
+      }
     }
+  }
+
+  // Cancel Subscription
+  async cancelSubscription(orgId: string): Promise<{ status: string }> {
+    const org = await this.orgsService.findOne(orgId);
+    if (!org) throw new Error('Organization not found');
+    if (!org.subscriptionId) throw new Error('No active subscription');
+
+    const subscription = await this.stripe.subscriptions.update(
+      org.subscriptionId,
+      { cancel_at_period_end: true },
+    );
+
+    await this.orgsService.updateSubscription(orgId, {
+      subscriptionStatus: subscription.status,
+    });
+
+    await this.sqsService.sendMessage(this.emailQueueUrl, {
+      type: 'subscription_canceled',
+      orgId,
+      orgName: org.name,
+      plan: this.getPlanName(org.plan),
+    });
+
+    this.logger.log(`Subscription cancellation scheduled for org ${orgId}`);
+    return { status: subscription.status };
+  }
+
+  private getPlanName(priceId?: string): string {
+    const plans: Record<string, string> = {
+      price_1T7oWwBCIaRH2MSXeaIC22S7: 'Basic Monthly',
+      price_1T7oWyBCIaRH2MSXa7dFawYC: 'Basic Yearly',
+      price_1T7oX0BCIaRH2MSX8fA87eOt: 'Pro Monthly',
+      price_1T7oX1BCIaRH2MSX9EqkbIi9: 'Pro Yearly',
+      price_1T7oX3BCIaRH2MSXeILwubbY: 'Enterprise Monthly',
+      price_1T7oX5BCIaRH2MSX4MpR0WmU: 'Enterprise Yearly',
+    };
+    return priceId ? plans[priceId] || priceId : 'Unknown';
   }
 
   // Payment Links

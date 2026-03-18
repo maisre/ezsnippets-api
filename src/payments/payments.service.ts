@@ -262,7 +262,9 @@ export class PaymentsService {
 
         const org = await this.orgsService.findByStripeCustomerId(customerId);
         if (org) {
+          const priceId = subscription.items.data[0]?.price?.id;
           await this.orgsService.updateSubscription(org.id, {
+            plan: priceId,
             subscriptionStatus: subscription.status,
           });
           this.logger.log(

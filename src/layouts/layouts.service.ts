@@ -1,10 +1,12 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Model, Types } from 'mongoose';
 import { Layout } from './interfaces/layout.interface';
 import { CreateLayoutDto } from './dto/create-layout.dto';
 import { UpdateLayoutDto } from './dto/update-layout.dto';
 import { OpenaiService } from '../openai';
 import { SnippetsService } from '../snippets/snippets.service';
+import { OrgsService } from '../orgs/orgs.service';
+import { PlansService } from '../plans/plans.service';
 
 @Injectable()
 export class LayoutsService {
@@ -12,6 +14,8 @@ export class LayoutsService {
     @Inject('LAYOUTS_MODEL') private readonly layoutModel: Model<Layout>,
     private readonly openaiService: OpenaiService,
     private readonly snippetsService: SnippetsService,
+    private readonly orgsService: OrgsService,
+    private readonly plansService: PlansService,
   ) {}
 
   async findAll(): Promise<Layout[]> {
@@ -32,11 +36,18 @@ export class LayoutsService {
     return this.layoutModel.find({ org: orgId }).exec();
   }
 
+  async countForOrg(orgId: string): Promise<number> {
+    if (!Types.ObjectId.isValid(orgId)) return 0;
+    return this.layoutModel.countDocuments({ org: orgId }).exec();
+  }
+
   async create(
     createLayoutDto: CreateLayoutDto,
     orgId: string,
     userId: string,
   ): Promise<Layout> {
+    await this.enforceLimit(orgId);
+
     const layoutData = {
       name: createLayoutDto.name,
       siteName: createLayoutDto.siteName,
@@ -218,5 +229,20 @@ export class LayoutsService {
     }
 
     return updatedLayout;
+  }
+
+  private async enforceLimit(orgId: string): Promise<void> {
+    const org = await this.orgsService.findOne(orgId);
+    if (!org?.plan) return; // No plan = trial, no limits enforced yet
+
+    const limits = await this.plansService.getLimitsForPriceId(org.plan);
+    if (!limits || limits.maxLayouts === -1) return; // Unlimited
+
+    const current = await this.countForOrg(orgId);
+    if (current >= limits.maxLayouts) {
+      throw new ForbiddenException(
+        `Layout limit reached (${limits.maxLayouts}). Upgrade your plan to create more layouts.`,
+      );
+    }
   }
 }

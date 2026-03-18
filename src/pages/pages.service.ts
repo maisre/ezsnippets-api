@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Model, Types } from 'mongoose';
 import { Page } from './interfaces/page.interface';
 import { CreatePageDto } from './dto/create-page.dto';
@@ -6,6 +6,8 @@ import { UpdatePageDto } from './dto/update-page.dto';
 import { RedisPubSubService } from '../redis';
 import { OpenaiService } from '../openai';
 import { SnippetsService } from '../snippets/snippets.service';
+import { OrgsService } from '../orgs/orgs.service';
+import { PlansService } from '../plans/plans.service';
 
 @Injectable()
 export class PagesService {
@@ -14,6 +16,8 @@ export class PagesService {
     private pubsub: RedisPubSubService,
     private readonly openaiService: OpenaiService,
     private readonly snippetsService: SnippetsService,
+    private readonly orgsService: OrgsService,
+    private readonly plansService: PlansService,
   ) {}
 
   async findAll(): Promise<Page[]> {
@@ -34,7 +38,14 @@ export class PagesService {
     return this.pageModel.find({ org: orgId }).exec();
   }
 
+  async countForOrg(orgId: string): Promise<number> {
+    if (!Types.ObjectId.isValid(orgId)) return 0;
+    return this.pageModel.countDocuments({ org: orgId }).exec();
+  }
+
   async create(createPageDto: CreatePageDto, orgId: string, userId: string): Promise<Page> {
+    await this.enforceLimit(orgId);
+
     const pageData = {
       name: createPageDto.name,
       siteName: createPageDto.siteName,
@@ -177,5 +188,20 @@ export class PagesService {
     });
 
     return updatedPage;
+  }
+
+  private async enforceLimit(orgId: string): Promise<void> {
+    const org = await this.orgsService.findOne(orgId);
+    if (!org?.plan) return; // No plan = trial, no limits enforced yet
+
+    const limits = await this.plansService.getLimitsForPriceId(org.plan);
+    if (!limits || limits.maxPages === -1) return; // Unlimited
+
+    const current = await this.countForOrg(orgId);
+    if (current >= limits.maxPages) {
+      throw new ForbiddenException(
+        `Page limit reached (${limits.maxPages}). Upgrade your plan to create more pages.`,
+      );
+    }
   }
 }

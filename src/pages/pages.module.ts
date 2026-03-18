@@ -5,9 +5,11 @@ import { PagesService } from './pages.service';
 import { pageProviders } from './pages.provider';
 import { SnippetsModule } from '../snippets/snippets.module';
 import { OpenaiModule } from '../openai';
+import { OrgsModule } from '../orgs/orgs.module';
+import { PlansModule } from '../plans/plans.module';
 
 @Module({
-  imports: [DatabaseModule, SnippetsModule, OpenaiModule.forRootAsync()],
+  imports: [DatabaseModule, SnippetsModule, OpenaiModule.forRootAsync(), OrgsModule, PlansModule],
   controllers: [PagesController],
   providers: [PagesService, ...pageProviders],
   exports: [PagesService],

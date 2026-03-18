@@ -9,6 +9,7 @@ import { PaymentsModule } from './payments/payments.module';
 import { LayoutsModule } from './layouts/layouts.module';
 import { RedisModule } from './redis/redis.module';
 import { OrgsModule } from './orgs/orgs.module';
+import { PlansModule } from './plans/plans.module';
 import { SqsModule } from './sqs/sqs.module';
 
 @Module({
@@ -22,6 +23,7 @@ import { SqsModule } from './sqs/sqs.module';
     PaymentsModule.forRootAsync(),
     LayoutsModule,
     OrgsModule,
+    PlansModule,
   ],
   controllers: [AppController],
   providers: [AppService],

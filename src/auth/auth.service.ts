@@ -15,8 +15,8 @@ export class AuthService {
     private sqsService: SqsService,
   ) {}
 
-  async validateUser(username: string, pass: string): Promise<any> {
-    const user = await this.usersService.findOne(username);
+  async validateUser(email: string, pass: string): Promise<any> {
+    const user = await this.usersService.findByEmail(email);
     if (!user) return null;
 
     // Try bcrypt comparison first, fall back to plaintext for existing users
@@ -34,24 +34,24 @@ export class AuthService {
     return null;
   }
 
-  async signup(username: string, password: string) {
-    const existing = await this.usersService.findOne(username);
+  async signup(email: string, password: string) {
+    const existing = await this.usersService.findByEmail(email);
     if (existing) {
-      throw new ConflictException('Username already exists');
+      throw new ConflictException('An account with this email already exists');
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const user = await this.usersService.create(username, hashedPassword);
+    const user = await this.usersService.create(email, hashedPassword);
 
     const org = await this.orgsService.createPersonalOrg(
       String(user._id),
-      username,
+      email,
     );
 
     await this.usersService.updateActiveOrg(String(user._id), String(org._id));
 
     const payload = {
-      username: user.username,
+      email: user.email,
       sub: user._id,
       activeOrg: org._id,
     };
@@ -59,7 +59,7 @@ export class AuthService {
     await this.sqsService.sendMessage(this.emailQueueUrl, {
       type: 'welcome_email',
       userId: String(user._id),
-      username: user.username,
+      email: user.email,
     });
 
     return {
@@ -69,7 +69,7 @@ export class AuthService {
 
   async login(user: any) {
     const payload = {
-      username: user._doc.username,
+      email: user._doc.email,
       sub: user._doc._id,
       activeOrg: user._doc.activeOrg,
     };

@@ -28,7 +28,7 @@ export class AppController {
 
   @Post('auth/signup')
   async signup(@Body() signupDto: SignupDto) {
-    return this.authService.signup(signupDto.username, signupDto.password);
+    return this.authService.signup(signupDto.email, signupDto.password);
   }
 
   @UseGuards(LocalAuthGuard)

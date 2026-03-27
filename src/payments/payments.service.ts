@@ -232,14 +232,27 @@ export class PaymentsService {
             await this.orgsService.findByStripeCustomerId(customerId);
           if (org && subscriptionId) {
             const subscription =
-              await this.stripe.subscriptions.retrieve(subscriptionId);
+              await this.stripe.subscriptions.retrieve(subscriptionId, {
+                expand: ['default_payment_method'],
+              });
             const priceId = subscription.items.data[0]?.price?.id;
 
-            await this.orgsService.updateSubscription(org.id, {
+            const updateData: Parameters<typeof this.orgsService.updateSubscription>[1] = {
               subscriptionId,
               plan: priceId,
               subscriptionStatus: subscription.status,
-            });
+              currentPeriodEnd: subscription.items.data[0]?.current_period_end,
+            };
+
+            const pm = subscription.default_payment_method;
+            if (pm && typeof pm !== 'string' && pm.card) {
+              updateData.cardBrand = pm.card.brand;
+              updateData.cardLast4 = pm.card.last4;
+              updateData.cardExpMonth = pm.card.exp_month;
+              updateData.cardExpYear = pm.card.exp_year;
+            }
+
+            await this.orgsService.updateSubscription(org.id, updateData);
 
             await this.sqsService.sendMessage(this.emailQueueUrl, {
               type: 'subscription_confirmed',
@@ -263,10 +276,21 @@ export class PaymentsService {
         const org = await this.orgsService.findByStripeCustomerId(customerId);
         if (org) {
           const priceId = subscription.items.data[0]?.price?.id;
-          await this.orgsService.updateSubscription(org.id, {
+          const updateData: Parameters<typeof this.orgsService.updateSubscription>[1] = {
             plan: priceId,
             subscriptionStatus: subscription.status,
-          });
+            currentPeriodEnd: subscription.items.data[0]?.current_period_end,
+          };
+
+          const pm = subscription.default_payment_method;
+          if (pm && typeof pm !== 'string' && pm.card) {
+            updateData.cardBrand = pm.card.brand;
+            updateData.cardLast4 = pm.card.last4;
+            updateData.cardExpMonth = pm.card.exp_month;
+            updateData.cardExpYear = pm.card.exp_year;
+          }
+
+          await this.orgsService.updateSubscription(org.id, updateData);
           this.logger.log(
             `Subscription ${subscription.status} for org ${org.id}`,
           );

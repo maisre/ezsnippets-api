@@ -50,9 +50,6 @@ export class PagesService {
       name: createPageDto.name,
       siteName: createPageDto.siteName,
       description: createPageDto.description,
-      projectId: createPageDto.projectId
-        ? new Types.ObjectId(createPageDto.projectId)
-        : undefined,
       org: new Types.ObjectId(orgId),
       createdBy: new Types.ObjectId(userId),
       snippets: createPageDto.snippets || [],
@@ -77,11 +74,6 @@ export class PagesService {
       updateData.siteName = updatePageDto.siteName;
     if (updatePageDto.description !== undefined)
       updateData.description = updatePageDto.description;
-    if (updatePageDto.projectId !== undefined) {
-      updateData.projectId = updatePageDto.projectId
-        ? new Types.ObjectId(updatePageDto.projectId)
-        : undefined;
-    }
     if (updatePageDto.snippets !== undefined) {
       updateData.snippets = updatePageDto.snippets;
     }
@@ -192,7 +184,11 @@ export class PagesService {
 
   private async enforceLimit(orgId: string): Promise<void> {
     const org = await this.orgsService.findOne(orgId);
-    if (!org?.plan) return; // No plan = trial, no limits enforced yet
+    if (!org?.plan) {
+      throw new ForbiddenException(
+        'No active plan. Subscribe to a plan to create pages.',
+      );
+    }
 
     const limits = await this.plansService.getLimitsForPriceId(org.plan);
     if (!limits || limits.maxPages === -1) return; // Unlimited

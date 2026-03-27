@@ -22,6 +22,11 @@ export const OrgSchema = new mongoose.Schema(
     subscriptionId: { type: String },
     plan: { type: String },
     subscriptionStatus: { type: String },
+    cardBrand: { type: String },
+    cardLast4: { type: String },
+    cardExpMonth: { type: Number },
+    cardExpYear: { type: Number },
+    currentPeriodEnd: { type: Number },
   },
   {
     toJSON: {

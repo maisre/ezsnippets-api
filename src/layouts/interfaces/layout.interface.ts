@@ -11,5 +11,5 @@ export interface Layout extends Document {
   readonly subPages: SubPage[];
   readonly org: Types.ObjectId;
   readonly createdBy?: Types.ObjectId;
-  readonly projectId?: string;
+
 }

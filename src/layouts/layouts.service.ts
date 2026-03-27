@@ -233,7 +233,11 @@ export class LayoutsService {
 
   private async enforceLimit(orgId: string): Promise<void> {
     const org = await this.orgsService.findOne(orgId);
-    if (!org?.plan) return; // No plan = trial, no limits enforced yet
+    if (!org?.plan) {
+      throw new ForbiddenException(
+        'No active plan. Subscribe to a plan to create layouts.',
+      );
+    }
 
     const limits = await this.plansService.getLimitsForPriceId(org.plan);
     if (!limits || limits.maxLayouts === -1) return; // Unlimited

@@ -14,10 +14,6 @@ export class UpdatePageDto {
   @IsOptional()
   description?: string;
 
-  @IsString()
-  @IsOptional()
-  projectId?: string;
-
   @IsArray()
   @IsOptional()
   snippets?: SnippetAbstract[];

@@ -21,10 +21,6 @@ export class UpdateLayoutDto {
 
   @IsString()
   @IsOptional()
-  projectId?: string;
-
-  @IsString()
-  @IsOptional()
   siteName?: string;
 
   @IsString()

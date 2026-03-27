@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { DatabaseModule } from '../database/database.module';
 import { LayoutsController } from './layouts.controller';
 import { LayoutsService } from './layouts.service';
@@ -9,7 +9,7 @@ import { OrgsModule } from '../orgs/orgs.module';
 import { PlansModule } from '../plans/plans.module';
 
 @Module({
-  imports: [DatabaseModule, OpenaiModule.forRootAsync(), SnippetsModule, OrgsModule, PlansModule],
+  imports: [DatabaseModule, OpenaiModule.forRootAsync(), SnippetsModule, OrgsModule, forwardRef(() => PlansModule)],
   controllers: [LayoutsController],
   providers: [LayoutsService, ...layoutProviders],
   exports: [LayoutsService],

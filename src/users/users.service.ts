@@ -6,12 +6,12 @@ import { User } from './interfaces/user.interface';
 export class UsersService {
   constructor(@Inject('USER_MODEL') private readonly userModel: Model<User>) {}
 
-  async findOne(username: string): Promise<User | null> {
-    return this.userModel.findOne({ username }).exec();
+  async findByEmail(email: string): Promise<User | null> {
+    return this.userModel.findOne({ email }).exec();
   }
 
-  async create(username: string, hashedPassword: string): Promise<User> {
-    const user = new this.userModel({ username, password: hashedPassword });
+  async create(email: string, hashedPassword: string): Promise<User> {
+    const user = new this.userModel({ email, password: hashedPassword });
     return user.save();
   }
 

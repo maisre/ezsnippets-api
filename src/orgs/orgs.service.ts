@@ -6,9 +6,9 @@ import { Org } from './interfaces/org.interface';
 export class OrgsService {
   constructor(@Inject('ORG_MODEL') private readonly orgModel: Model<Org>) {}
 
-  async createPersonalOrg(userId: string, username: string): Promise<Org> {
+  async createPersonalOrg(userId: string, email: string): Promise<Org> {
     const org = new this.orgModel({
-      name: `${username}'s Org`,
+      name: `${email}'s Org`,
       personal: true,
       members: [{ user: new Types.ObjectId(userId), role: 'owner' }],
     });
@@ -43,6 +43,11 @@ export class OrgsService {
       subscriptionId?: string;
       plan?: string;
       subscriptionStatus?: string;
+      cardBrand?: string;
+      cardLast4?: string;
+      cardExpMonth?: number;
+      cardExpYear?: number;
+      currentPeriodEnd?: number;
     },
   ): Promise<Org | null> {
     return this.orgModel.findByIdAndUpdate(orgId, data, { new: true }).exec();

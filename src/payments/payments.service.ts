@@ -244,13 +244,35 @@ export class PaymentsService {
               currentPeriodEnd: subscription.items.data[0]?.current_period_end,
             };
 
-            const pm = subscription.default_payment_method;
+            // Try subscription's default_payment_method first
+            let pm = subscription.default_payment_method;
+
+            // Fallback: if subscription has no expanded PM, check the customer's default
+            if (!pm || typeof pm === 'string') {
+              const customer = await this.stripe.customers.retrieve(customerId);
+              if (customer && !customer.deleted) {
+                const defaultPmId =
+                  typeof customer.invoice_settings?.default_payment_method === 'string'
+                    ? customer.invoice_settings.default_payment_method
+                    : customer.invoice_settings?.default_payment_method?.id;
+                if (defaultPmId) {
+                  pm = await this.stripe.paymentMethods.retrieve(defaultPmId);
+                }
+              }
+            }
+
             if (pm && typeof pm !== 'string' && pm.card) {
               updateData.cardBrand = pm.card.brand;
               updateData.cardLast4 = pm.card.last4;
               updateData.cardExpMonth = pm.card.exp_month;
               updateData.cardExpYear = pm.card.exp_year;
             }
+
+            this.logger.log(
+              `checkout.session.completed for org ${org.id}: ` +
+              `periodEnd=${updateData.currentPeriodEnd}, ` +
+              `card=${updateData.cardBrand || 'none'} ${updateData.cardLast4 || ''}`,
+            );
 
             await this.orgsService.updateSubscription(org.id, updateData);
 
@@ -267,14 +289,19 @@ export class PaymentsService {
         break;
       }
       case 'customer.subscription.updated': {
-        const subscription = event.data.object as Stripe.Subscription;
+        const subEvent = event.data.object as Stripe.Subscription;
         const customerId =
-          typeof subscription.customer === 'string'
-            ? subscription.customer
-            : subscription.customer.id;
+          typeof subEvent.customer === 'string'
+            ? subEvent.customer
+            : subEvent.customer.id;
 
         const org = await this.orgsService.findByStripeCustomerId(customerId);
         if (org) {
+          // Re-retrieve with expanded payment method to get card details
+          const subscription = await this.stripe.subscriptions.retrieve(
+            subEvent.id,
+            { expand: ['default_payment_method'] },
+          );
           const priceId = subscription.items.data[0]?.price?.id;
           const updateData: Parameters<typeof this.orgsService.updateSubscription>[1] = {
             plan: priceId,
@@ -333,7 +360,28 @@ export class PaymentsService {
           if (customerId) {
             const org =
               await this.orgsService.findByStripeCustomerId(customerId);
-            if (org) {
+            if (org && org.subscriptionId) {
+              // Refresh subscription period and card info on recurring payment
+              const subscription =
+                await this.stripe.subscriptions.retrieve(org.subscriptionId, {
+                  expand: ['default_payment_method'],
+                });
+
+              const updateData: Parameters<typeof this.orgsService.updateSubscription>[1] = {
+                currentPeriodEnd: subscription.items.data[0]?.current_period_end,
+                subscriptionStatus: subscription.status,
+              };
+
+              const pm = subscription.default_payment_method;
+              if (pm && typeof pm !== 'string' && pm.card) {
+                updateData.cardBrand = pm.card.brand;
+                updateData.cardLast4 = pm.card.last4;
+                updateData.cardExpMonth = pm.card.exp_month;
+                updateData.cardExpYear = pm.card.exp_year;
+              }
+
+              await this.orgsService.updateSubscription(org.id, updateData);
+
               await this.sqsService.sendMessage(this.emailQueueUrl, {
                 type: 'payment_succeeded',
                 orgId: org.id,

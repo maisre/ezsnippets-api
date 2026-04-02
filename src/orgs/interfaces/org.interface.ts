@@ -18,4 +18,5 @@ export interface Org extends Document {
   cardExpMonth?: number;
   cardExpYear?: number;
   currentPeriodEnd?: number;
+  cancelAtPeriodEnd?: boolean;
 }

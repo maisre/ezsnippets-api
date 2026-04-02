@@ -48,6 +48,7 @@ export class OrgsService {
       cardExpMonth?: number;
       cardExpYear?: number;
       currentPeriodEnd?: number;
+      cancelAtPeriodEnd?: boolean;
     },
   ): Promise<Org | null> {
     return this.orgModel.findByIdAndUpdate(orgId, data, { new: true }).exec();

@@ -242,6 +242,7 @@ export class PaymentsService {
               plan: priceId,
               subscriptionStatus: subscription.status,
               currentPeriodEnd: subscription.items.data[0]?.current_period_end,
+              cancelAtPeriodEnd: subscription.cancel_at_period_end,
             };
 
             // Try subscription's default_payment_method first
@@ -307,6 +308,7 @@ export class PaymentsService {
             plan: priceId,
             subscriptionStatus: subscription.status,
             currentPeriodEnd: subscription.items.data[0]?.current_period_end,
+            cancelAtPeriodEnd: subscription.cancel_at_period_end,
           };
 
           const pm = subscription.default_payment_method;
@@ -336,6 +338,7 @@ export class PaymentsService {
           const priceId = subscription.items.data[0]?.price?.id;
           await this.orgsService.updateSubscription(org.id, {
             subscriptionStatus: subscription.status,
+            cancelAtPeriodEnd: false,
           });
 
           await this.sqsService.sendMessage(this.emailQueueUrl, {
@@ -370,6 +373,7 @@ export class PaymentsService {
               const updateData: Parameters<typeof this.orgsService.updateSubscription>[1] = {
                 currentPeriodEnd: subscription.items.data[0]?.current_period_end,
                 subscriptionStatus: subscription.status,
+                cancelAtPeriodEnd: subscription.cancel_at_period_end,
               };
 
               const pm = subscription.default_payment_method;
@@ -438,6 +442,7 @@ export class PaymentsService {
 
     await this.orgsService.updateSubscription(orgId, {
       subscriptionStatus: subscription.status,
+      cancelAtPeriodEnd: true,
     });
 
     await this.sqsService.sendMessage(this.emailQueueUrl, {

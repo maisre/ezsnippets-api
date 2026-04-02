@@ -1,0 +1,55 @@
+name: Build & Deploy ez-api
+
+on:
+  push:
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: ez-api
+  INFRA_REPO: # TODO: owner/ez-infra
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $REGISTRY/$ECR_REPOSITORY:latest .
+          docker push $REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: Update image tag in ez-infra
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          git clone https://x-access-token:${{ secrets.INFRA_PAT }}@github.com/${{ env.INFRA_REPO }}.git infra
+          cd infra
+
+          # Update staging immediately
+          sed -i "s|tag:.*|tag: \"$IMAGE_TAG\"|" environments/staging/ez-api.yaml
+
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add .
+          git commit -m "deploy ez-api $IMAGE_TAG to staging"
+          git push

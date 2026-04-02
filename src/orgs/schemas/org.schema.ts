@@ -27,6 +27,7 @@ export const OrgSchema = new mongoose.Schema(
     cardExpMonth: { type: Number },
     cardExpYear: { type: Number },
     currentPeriodEnd: { type: Number },
+    cancelAtPeriodEnd: { type: Boolean, default: false },
   },
   {
     toJSON: {

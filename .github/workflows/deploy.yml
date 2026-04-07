@@ -7,7 +7,7 @@ on:
 env:
   AWS_REGION: us-east-1
   ECR_REPOSITORY: ez-api
-  INFRA_REPO: # TODO: owner/ez-infra
+  INFRA_REPO: maisre/ez-infra
 
 jobs:
   build-and-push:

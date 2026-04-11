@@ -9,10 +9,6 @@ export class SqsService {
   constructor() {
     this.client = new SQSClient({
       region: process.env.AWS_REGION || 'us-east-1',
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY || '',
-        secretAccessKey: process.env.AWS_ACCESS_SECRET || '',
-      },
     });
   }
 

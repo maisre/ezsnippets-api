@@ -22,7 +22,6 @@ export class AppController {
 
   @Get()
   getHello(@Headers('Authorization') customHeader?: string): string {
-    console.log(`got this for header - ${customHeader}`);
     return this.appService.getHello();
   }
 

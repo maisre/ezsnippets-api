@@ -7,10 +7,13 @@ import { PassportModule } from '@nestjs/passport';
 import { LocalStrategy } from './local.strategy';
 import { JwtModule } from '@nestjs/jwt';
 import { JwtStrategy } from './jwt.strategy';
+import { DatabaseModule } from '../database/database.module';
+import { passwordResetProviders } from './password-reset.providers';
 
 @Module({
   imports: [
     ConfigModule.forRoot(),
+    DatabaseModule,
     UsersModule,
     OrgsModule,
     PassportModule,
@@ -27,10 +30,17 @@ import { JwtStrategy } from './jwt.strategy';
     AuthService,
     LocalStrategy,
     JwtStrategy,
+    ...passwordResetProviders,
     {
       provide: 'EMAIL_QUEUE_URL',
       useFactory: (configService: ConfigService) =>
         configService.get('EMAIL_QUEUE_URL'),
+      inject: [ConfigService],
+    },
+    {
+      provide: 'FRONTEND_URL',
+      useFactory: (configService: ConfigService) =>
+        configService.get('FRONTEND_URL') || 'http://localhost:4200',
       inject: [ConfigService],
     },
   ],

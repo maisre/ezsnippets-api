@@ -3,6 +3,7 @@ import {
   Request,
   Get,
   Headers,
+  HttpCode,
   Post,
   UseGuards,
   Body,
@@ -12,6 +13,8 @@ import { LocalAuthGuard } from './auth/local.strategy';
 import { AuthService } from './auth/auth.service';
 import { JwtAuthGuard } from './auth/jwt.strategy';
 import { SignupDto } from './auth/dto/signup.dto';
+import { ForgotPasswordDto } from './auth/dto/forgot-password.dto';
+import { ResetPasswordDto } from './auth/dto/reset-password.dto';
 
 @Controller()
 export class AppController {
@@ -40,6 +43,18 @@ export class AppController {
   @Post('auth/logout')
   async logout(@Request() req) {
     return req.logout(() => {});
+  }
+
+  @Post('auth/forgot-password')
+  @HttpCode(204)
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    await this.authService.forgotPassword(dto.email);
+  }
+
+  @Post('auth/reset-password')
+  @HttpCode(204)
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    await this.authService.resetPassword(dto.token, dto.password);
   }
 
   @UseGuards(JwtAuthGuard)

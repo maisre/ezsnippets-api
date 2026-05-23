@@ -18,7 +18,7 @@ export const OrgSchema = new mongoose.Schema(
         },
       },
     ],
-    stripeCustomerId: { type: String },
+    paddleCustomerId: { type: String },
     subscriptionId: { type: String },
     plan: { type: String },
     subscriptionStatus: { type: String },

@@ -9,7 +9,7 @@ export interface Org extends Document {
   readonly name: string;
   readonly personal: boolean;
   readonly members: OrgMember[];
-  stripeCustomerId?: string;
+  paddleCustomerId?: string;
   subscriptionId?: string;
   plan?: string;
   subscriptionStatus?: string;

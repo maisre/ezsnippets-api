@@ -1,443 +1,63 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import {
+  Environment,
+  EventName,
+  Paddle,
+  type SubscriptionNotification,
+  type TransactionNotification,
+} from '@paddle/paddle-node-sdk';
 import { OrgsService } from '../orgs/orgs.service';
 import { SqsService } from '../sqs/sqs.service';
-import Stripe from 'stripe';
+
+type SubscriptionUpdate = Parameters<OrgsService['updateSubscription']>[1];
 
 @Injectable()
 export class PaymentsService {
-  private stripe: Stripe;
+  private paddle: Paddle;
   private readonly logger = new Logger(PaymentsService.name);
 
   constructor(
-    @Inject('STRIPE_API_KEY') private readonly apiKey: string,
-    @Inject('STRIPE_WEBHOOK_SECRET') private readonly webhookSecret: string,
+    @Inject('PADDLE_API_KEY') private readonly apiKey: string,
+    @Inject('PADDLE_WEBHOOK_SECRET') private readonly webhookSecret: string,
+    @Inject('PADDLE_ENVIRONMENT') private readonly paddleEnvironment: string,
     @Inject('EMAIL_QUEUE_URL') private readonly emailQueueUrl: string,
     private readonly orgsService: OrgsService,
     private readonly sqsService: SqsService,
   ) {
-    this.stripe = new Stripe(this.apiKey, {
-      apiVersion: '2025-09-30.clover',
+    this.paddle = new Paddle(this.apiKey, {
+      environment:
+        this.paddleEnvironment === 'production'
+          ? Environment.production
+          : Environment.sandbox,
     });
   }
 
-  // Get Products
-  async getProducts(): Promise<Stripe.Product[]> {
-    try {
-      const products = await this.stripe.products.list();
-      this.logger.log('Products fetched successfully');
-      return products.data;
-    } catch (error) {
-      this.logger.error('Failed to fetch products', error.stack);
-      throw error;
-    }
-  }
-
-  // Get Customers
-  async getCustomers() {
-    try {
-      const customers = await this.stripe.customers.list({});
-      this.logger.log('Customers fetched successfully');
-      return customers.data;
-    } catch (error) {
-      this.logger.error('Failed to fetch products', error.stack);
-      throw error;
-    }
-  }
-
-  // Accept Payments (Create Payment Intent)
-  async createPaymentIntent(
-    amount: number,
-    currency: string,
-  ): Promise<Stripe.PaymentIntent> {
-    try {
-      const paymentIntent = await this.stripe.paymentIntents.create({
-        payment_method_types: ['card'],
-        amount,
-        currency,
-      });
-      this.logger.log(
-        `PaymentIntent created successfully with amount: ${amount} ${currency}`,
-      );
-      return paymentIntent;
-    } catch (error) {
-      this.logger.error('Failed to create PaymentIntent', error.stack);
-      throw error;
-    }
-  }
-
-  // Subscriptions (Create Subscription)
-  async createSubscription(
-    customerId: string,
-    priceId: string,
-  ): Promise<Stripe.Subscription> {
-    try {
-      const subscription = await this.stripe.subscriptions.create({
-        customer: customerId,
-        items: [{ price: priceId }],
-      });
-      this.logger.log(
-        `Subscription created successfully for customer ${customerId}`,
-      );
-      return subscription;
-    } catch (error) {
-      this.logger.error('Failed to create subscription', error.stack);
-      throw error;
-    }
-  }
-
-  // Customer Management (Create Customer)
-  async createCustomer(email: string, name: string): Promise<Stripe.Customer> {
-    try {
-      const customer = await this.stripe.customers.create({ email, name });
-      this.logger.log(`Customer created successfully with email: ${email}`);
-      return customer;
-    } catch (error) {
-      this.logger.error('Failed to create customer', error.stack);
-      throw error;
-    }
-  }
-
-  // Product & Pricing Management (Create Product with Price)
-  async createProduct(
-    name: string,
-    description: string,
-    price: number,
-  ): Promise<Stripe.Product> {
-    try {
-      const product = await this.stripe.products.create({ name, description });
-      await this.stripe.prices.create({
-        product: product.id,
-        unit_amount: price * 100, // amount in cents
-        currency: 'usd',
-      });
-      this.logger.log(`Product created successfully: ${name}`);
-      return product;
-    } catch (error) {
-      this.logger.error('Failed to create product', error.stack);
-      throw error;
-    }
-  }
-
-  // Refunds (Process Refund)
-  async refundPayment(paymentIntentId: string): Promise<Stripe.Refund> {
-    try {
-      const refund = await this.stripe.refunds.create({
-        payment_intent: paymentIntentId,
-      });
-      this.logger.log(
-        `Refund processed successfully for PaymentIntent: ${paymentIntentId}`,
-      );
-      return refund;
-    } catch (error) {
-      this.logger.error('Failed to process refund', error.stack);
-      throw error;
-    }
-  }
-
-  // Payment Method Integration (Attach Payment Method)
-  async attachPaymentMethod(
-    customerId: string,
-    paymentMethodId: string,
-  ): Promise<void> {
-    try {
-      await this.stripe.paymentMethods.attach(paymentMethodId, {
-        customer: customerId,
-      });
-      this.logger.log(
-        `Payment method ${paymentMethodId} attached to customer ${customerId}`,
-      );
-    } catch (error) {
-      this.logger.error('Failed to attach payment method', error.stack);
-      throw error;
-    }
-  }
-
-  // Reports and Analytics (Retrieve Balance)
-  async getBalance(): Promise<Stripe.Balance> {
-    try {
-      const balance = await this.stripe.balance.retrieve();
-      this.logger.log('Balance retrieved successfully');
-      return balance;
-    } catch (error) {
-      this.logger.error('Failed to retrieve balance', error.stack);
-      throw error;
-    }
-  }
-
-  // Checkout Session
+  // Create a Paddle Transaction the frontend will open via Paddle.Checkout.open({ transactionId })
   async createCheckoutSession(
     orgId: string,
     priceId: string,
-    successUrl: string,
-    cancelUrl: string,
-  ): Promise<{ url: string | null }> {
+  ): Promise<{ transactionId: string }> {
     const org = await this.orgsService.findOne(orgId);
     if (!org) throw new Error('Organization not found');
 
-    let customerId = org.stripeCustomerId;
-
-    if (!customerId) {
-      const customer = await this.stripe.customers.create({
-        metadata: { orgId },
-      });
-      customerId = customer.id;
-      await this.orgsService.updateSubscription(orgId, {
-        stripeCustomerId: customerId,
-      });
-    }
-
-    const session = await this.stripe.checkout.sessions.create({
-      customer: customerId,
-      mode: 'subscription',
-      line_items: [{ price: priceId, quantity: 1 }],
-      success_url: successUrl,
-      cancel_url: cancelUrl,
+    const transaction = await this.paddle.transactions.create({
+      items: [{ priceId, quantity: 1 }],
+      customerId: org.paddleCustomerId ?? null,
+      customData: { orgId },
     });
 
-    this.logger.log(`Checkout session created for org ${orgId}`);
-    return { url: session.url };
+    this.logger.log(`Transaction ${transaction.id} created for org ${orgId}`);
+    return { transactionId: transaction.id };
   }
 
-  // Webhook
-  async handleWebhook(signature: string, payload: Buffer): Promise<void> {
-    let event: Stripe.Event;
-
-    if (this.webhookSecret) {
-      event = this.stripe.webhooks.constructEvent(
-        payload,
-        signature,
-        this.webhookSecret,
-      );
-    } else {
-      event = JSON.parse(payload.toString()) as Stripe.Event;
-      this.logger.warn(
-        'No STRIPE_WEBHOOK_SECRET set — skipping signature verification',
-      );
-    }
-
-    switch (event.type) {
-      case 'checkout.session.completed': {
-        const session = event.data.object as Stripe.Checkout.Session;
-        if (session.mode === 'subscription' && session.customer) {
-          const customerId =
-            typeof session.customer === 'string'
-              ? session.customer
-              : session.customer.id;
-          const subscriptionId =
-            typeof session.subscription === 'string'
-              ? session.subscription
-              : session.subscription?.id;
-
-          const org =
-            await this.orgsService.findByStripeCustomerId(customerId);
-          if (org && subscriptionId) {
-            const subscription =
-              await this.stripe.subscriptions.retrieve(subscriptionId, {
-                expand: ['default_payment_method'],
-              });
-            const priceId = subscription.items.data[0]?.price?.id;
-
-            const updateData: Parameters<typeof this.orgsService.updateSubscription>[1] = {
-              subscriptionId,
-              plan: priceId,
-              subscriptionStatus: subscription.status,
-              currentPeriodEnd: subscription.items.data[0]?.current_period_end,
-              cancelAtPeriodEnd: subscription.cancel_at_period_end,
-            };
-
-            // Try subscription's default_payment_method first
-            let pm = subscription.default_payment_method;
-
-            // Fallback: if subscription has no expanded PM, check the customer's default
-            if (!pm || typeof pm === 'string') {
-              const customer = await this.stripe.customers.retrieve(customerId);
-              if (customer && !customer.deleted) {
-                const defaultPmId =
-                  typeof customer.invoice_settings?.default_payment_method === 'string'
-                    ? customer.invoice_settings.default_payment_method
-                    : customer.invoice_settings?.default_payment_method?.id;
-                if (defaultPmId) {
-                  pm = await this.stripe.paymentMethods.retrieve(defaultPmId);
-                }
-              }
-            }
-
-            if (pm && typeof pm !== 'string' && pm.card) {
-              updateData.cardBrand = pm.card.brand;
-              updateData.cardLast4 = pm.card.last4;
-              updateData.cardExpMonth = pm.card.exp_month;
-              updateData.cardExpYear = pm.card.exp_year;
-            }
-
-            this.logger.log(
-              `checkout.session.completed for org ${org.id}: ` +
-              `periodEnd=${updateData.currentPeriodEnd}, ` +
-              `card=${updateData.cardBrand || 'none'} ${updateData.cardLast4 || ''}`,
-            );
-
-            await this.orgsService.updateSubscription(org.id, updateData);
-
-            await this.sqsService.sendMessage(this.emailQueueUrl, {
-              type: 'subscription_confirmed',
-              orgId: org.id,
-              orgName: org.name,
-              plan: this.getPlanName(priceId),
-            });
-
-            this.logger.log(`Subscription activated for org ${org.id}`);
-          }
-        }
-        break;
-      }
-      case 'customer.subscription.updated': {
-        const subEvent = event.data.object as Stripe.Subscription;
-        const customerId =
-          typeof subEvent.customer === 'string'
-            ? subEvent.customer
-            : subEvent.customer.id;
-
-        const org = await this.orgsService.findByStripeCustomerId(customerId);
-        if (org) {
-          // Re-retrieve with expanded payment method to get card details
-          const subscription = await this.stripe.subscriptions.retrieve(
-            subEvent.id,
-            { expand: ['default_payment_method'] },
-          );
-          const priceId = subscription.items.data[0]?.price?.id;
-          const updateData: Parameters<typeof this.orgsService.updateSubscription>[1] = {
-            plan: priceId,
-            subscriptionStatus: subscription.status,
-            currentPeriodEnd: subscription.items.data[0]?.current_period_end,
-            cancelAtPeriodEnd: subscription.cancel_at_period_end,
-          };
-
-          const pm = subscription.default_payment_method;
-          if (pm && typeof pm !== 'string' && pm.card) {
-            updateData.cardBrand = pm.card.brand;
-            updateData.cardLast4 = pm.card.last4;
-            updateData.cardExpMonth = pm.card.exp_month;
-            updateData.cardExpYear = pm.card.exp_year;
-          }
-
-          await this.orgsService.updateSubscription(org.id, updateData);
-          this.logger.log(
-            `Subscription ${subscription.status} for org ${org.id}`,
-          );
-        }
-        break;
-      }
-      case 'customer.subscription.deleted': {
-        const subscription = event.data.object as Stripe.Subscription;
-        const customerId =
-          typeof subscription.customer === 'string'
-            ? subscription.customer
-            : subscription.customer.id;
-
-        const org = await this.orgsService.findByStripeCustomerId(customerId);
-        if (org) {
-          const priceId = subscription.items.data[0]?.price?.id;
-          await this.orgsService.updateSubscription(org.id, {
-            subscriptionStatus: subscription.status,
-            cancelAtPeriodEnd: false,
-          });
-
-          await this.sqsService.sendMessage(this.emailQueueUrl, {
-            type: 'subscription_expired',
-            orgId: org.id,
-            orgName: org.name,
-            plan: this.getPlanName(priceId),
-          });
-
-          this.logger.log(`Subscription deleted for org ${org.id}`);
-        }
-        break;
-      }
-      case 'invoice.payment_succeeded': {
-        const invoice = event.data.object as Stripe.Invoice;
-        if (invoice.billing_reason === 'subscription_cycle') {
-          const customerId =
-            typeof invoice.customer === 'string'
-              ? invoice.customer
-              : invoice.customer?.id;
-
-          if (customerId) {
-            const org =
-              await this.orgsService.findByStripeCustomerId(customerId);
-            if (org && org.subscriptionId) {
-              // Refresh subscription period and card info on recurring payment
-              const subscription =
-                await this.stripe.subscriptions.retrieve(org.subscriptionId, {
-                  expand: ['default_payment_method'],
-                });
-
-              const updateData: Parameters<typeof this.orgsService.updateSubscription>[1] = {
-                currentPeriodEnd: subscription.items.data[0]?.current_period_end,
-                subscriptionStatus: subscription.status,
-                cancelAtPeriodEnd: subscription.cancel_at_period_end,
-              };
-
-              const pm = subscription.default_payment_method;
-              if (pm && typeof pm !== 'string' && pm.card) {
-                updateData.cardBrand = pm.card.brand;
-                updateData.cardLast4 = pm.card.last4;
-                updateData.cardExpMonth = pm.card.exp_month;
-                updateData.cardExpYear = pm.card.exp_year;
-              }
-
-              await this.orgsService.updateSubscription(org.id, updateData);
-
-              await this.sqsService.sendMessage(this.emailQueueUrl, {
-                type: 'payment_succeeded',
-                orgId: org.id,
-                orgName: org.name,
-                plan: this.getPlanName(org.plan),
-                amountPaid: (invoice.amount_paid / 100).toFixed(2),
-                currency: invoice.currency,
-              });
-
-              this.logger.log(`Payment succeeded for org ${org.id}`);
-            }
-          }
-        }
-        break;
-      }
-      case 'invoice.payment_failed': {
-        const invoice = event.data.object as Stripe.Invoice;
-        const customerId =
-          typeof invoice.customer === 'string'
-            ? invoice.customer
-            : invoice.customer?.id;
-
-        if (customerId) {
-          const org =
-            await this.orgsService.findByStripeCustomerId(customerId);
-          if (org) {
-            await this.sqsService.sendMessage(this.emailQueueUrl, {
-              type: 'payment_failed',
-              orgId: org.id,
-              orgName: org.name,
-              plan: this.getPlanName(org.plan),
-              amountDue: (invoice.amount_due / 100).toFixed(2),
-              currency: invoice.currency,
-            });
-
-            this.logger.log(`Payment failed for org ${org.id}`);
-          }
-        }
-        break;
-      }
-    }
-  }
-
-  // Cancel Subscription
   async cancelSubscription(orgId: string): Promise<{ status: string }> {
     const org = await this.orgsService.findOne(orgId);
     if (!org) throw new Error('Organization not found');
     if (!org.subscriptionId) throw new Error('No active subscription');
 
-    const subscription = await this.stripe.subscriptions.update(
+    const subscription = await this.paddle.subscriptions.cancel(
       org.subscriptionId,
-      { cancel_at_period_end: true },
+      { effectiveFrom: 'next_billing_period' },
     );
 
     await this.orgsService.updateSubscription(orgId, {
@@ -456,29 +76,209 @@ export class PaymentsService {
     return { status: subscription.status };
   }
 
-  private getPlanName(priceId?: string): string {
-    const plans: Record<string, string> = {
-      price_1T7oWwBCIaRH2MSXeaIC22S7: 'Basic Monthly',
-      price_1T7oWyBCIaRH2MSXa7dFawYC: 'Basic Yearly',
-      price_1T7oX0BCIaRH2MSX8fA87eOt: 'Pro Monthly',
-      price_1T7oX1BCIaRH2MSX9EqkbIi9: 'Pro Yearly',
-      price_1T7oX3BCIaRH2MSXeILwubbY: 'Enterprise Monthly',
-      price_1T7oX5BCIaRH2MSX4MpR0WmU: 'Enterprise Yearly',
-    };
-    return priceId ? plans[priceId] || priceId : 'Unknown';
+  async handleWebhook(signature: string, payload: Buffer): Promise<void> {
+    if (!this.webhookSecret) {
+      this.logger.warn(
+        'No PADDLE_WEBHOOK_SECRET set — skipping signature verification',
+      );
+      return;
+    }
+
+    const event = await this.paddle.webhooks.unmarshal(
+      payload.toString(),
+      this.webhookSecret,
+      signature,
+    );
+
+    switch (event.eventType) {
+      case EventName.SubscriptionCreated:
+        await this.onSubscriptionCreated(event.data);
+        break;
+      case EventName.SubscriptionUpdated:
+        await this.onSubscriptionUpdated(event.data);
+        break;
+      case EventName.SubscriptionCanceled:
+        await this.onSubscriptionCanceled(event.data);
+        break;
+      case EventName.TransactionCompleted:
+        await this.onTransactionCompleted(event.data);
+        break;
+      case EventName.TransactionPaymentFailed:
+        await this.onTransactionPaymentFailed(event.data);
+        break;
+    }
   }
 
-  // Payment Links
-  async createPaymentLink(priceId: string): Promise<Stripe.PaymentLink> {
-    try {
-      const paymentLink = await this.stripe.paymentLinks.create({
-        line_items: [{ price: priceId, quantity: 1 }],
-      });
-      this.logger.log('Payment link created successfully');
-      return paymentLink;
-    } catch (error) {
-      this.logger.error('Failed to create payment link', error.stack);
-      throw error;
+  private async onSubscriptionCreated(
+    sub: SubscriptionNotification,
+  ): Promise<void> {
+    const orgId = this.extractOrgId(sub.customData);
+    if (!orgId) {
+      this.logger.warn(`subscription.created ${sub.id} missing customData.orgId`);
+      return;
     }
+
+    const org = await this.orgsService.findOne(orgId);
+    if (!org) return;
+
+    const priceId = sub.items[0]?.price?.id;
+    await this.orgsService.updateSubscription(orgId, {
+      paddleCustomerId: sub.customerId,
+      subscriptionId: sub.id,
+      plan: priceId,
+      subscriptionStatus: sub.status,
+      currentPeriodEnd: this.toUnixSeconds(sub.currentBillingPeriod?.endsAt),
+      cancelAtPeriodEnd: sub.scheduledChange?.action === 'cancel',
+    });
+
+    await this.sqsService.sendMessage(this.emailQueueUrl, {
+      type: 'subscription_confirmed',
+      orgId,
+      orgName: org.name,
+      plan: this.getPlanName(priceId),
+    });
+
+    this.logger.log(`Subscription activated for org ${orgId}`);
+  }
+
+  private async onSubscriptionUpdated(
+    sub: SubscriptionNotification,
+  ): Promise<void> {
+    const org = await this.orgsService.findByPaddleCustomerId(sub.customerId);
+    if (!org) return;
+
+    const priceId = sub.items[0]?.price?.id;
+    await this.orgsService.updateSubscription(org.id, {
+      plan: priceId,
+      subscriptionStatus: sub.status,
+      currentPeriodEnd: this.toUnixSeconds(sub.currentBillingPeriod?.endsAt),
+      cancelAtPeriodEnd: sub.scheduledChange?.action === 'cancel',
+    });
+
+    this.logger.log(`Subscription ${sub.status} for org ${org.id}`);
+  }
+
+  private async onSubscriptionCanceled(
+    sub: SubscriptionNotification,
+  ): Promise<void> {
+    const org = await this.orgsService.findByPaddleCustomerId(sub.customerId);
+    if (!org) return;
+
+    const priceId = sub.items[0]?.price?.id;
+    await this.orgsService.updateSubscription(org.id, {
+      subscriptionStatus: sub.status,
+      cancelAtPeriodEnd: false,
+    });
+
+    await this.sqsService.sendMessage(this.emailQueueUrl, {
+      type: 'subscription_expired',
+      orgId: org.id,
+      orgName: org.name,
+      plan: this.getPlanName(priceId),
+    });
+
+    this.logger.log(`Subscription deleted for org ${org.id}`);
+  }
+
+  private async onTransactionCompleted(
+    tx: TransactionNotification,
+  ): Promise<void> {
+    if (!tx.customerId) return;
+    const org = await this.orgsService.findByPaddleCustomerId(tx.customerId);
+    if (!org) return;
+
+    const card = tx.payments.find((p) => p.methodDetails?.card)?.methodDetails
+      ?.card;
+
+    const update: SubscriptionUpdate = {};
+    if (card) {
+      update.cardBrand = card.type;
+      update.cardLast4 = card.last4;
+      update.cardExpMonth = card.expiryMonth;
+      update.cardExpYear = card.expiryYear;
+    }
+
+    if (tx.origin === 'subscription_recurring' && tx.subscriptionId) {
+      const subscription = await this.paddle.subscriptions.get(
+        tx.subscriptionId,
+      );
+      update.currentPeriodEnd = this.toUnixSeconds(
+        subscription.currentBillingPeriod?.endsAt,
+      );
+      update.subscriptionStatus = subscription.status;
+      update.cancelAtPeriodEnd =
+        subscription.scheduledChange?.action === 'cancel';
+    }
+
+    if (Object.keys(update).length > 0) {
+      await this.orgsService.updateSubscription(org.id, update);
+    }
+
+    if (tx.origin === 'subscription_recurring') {
+      const total = tx.details?.totals;
+      await this.sqsService.sendMessage(this.emailQueueUrl, {
+        type: 'payment_succeeded',
+        orgId: org.id,
+        orgName: org.name,
+        plan: this.getPlanName(org.plan),
+        amountPaid: this.formatMinorUnits(total?.grandTotal),
+        currency: total?.currencyCode?.toLowerCase() ?? '',
+      });
+      this.logger.log(`Payment succeeded for org ${org.id}`);
+    } else {
+      this.logger.log(`Transaction completed for org ${org.id}`);
+    }
+  }
+
+  private async onTransactionPaymentFailed(
+    tx: TransactionNotification,
+  ): Promise<void> {
+    if (!tx.customerId) return;
+    const org = await this.orgsService.findByPaddleCustomerId(tx.customerId);
+    if (!org) return;
+
+    const total = tx.details?.totals;
+    await this.sqsService.sendMessage(this.emailQueueUrl, {
+      type: 'payment_failed',
+      orgId: org.id,
+      orgName: org.name,
+      plan: this.getPlanName(org.plan),
+      amountDue: this.formatMinorUnits(total?.grandTotal),
+      currency: total?.currencyCode?.toLowerCase() ?? '',
+    });
+
+    this.logger.log(`Payment failed for org ${org.id}`);
+  }
+
+  private extractOrgId(customData: unknown): string | undefined {
+    if (customData && typeof customData === 'object' && 'orgId' in customData) {
+      const orgId = (customData as { orgId: unknown }).orgId;
+      return typeof orgId === 'string' ? orgId : undefined;
+    }
+    return undefined;
+  }
+
+  private toUnixSeconds(iso: string | null | undefined): number | undefined {
+    if (!iso) return undefined;
+    const ms = Date.parse(iso);
+    return Number.isNaN(ms) ? undefined : Math.floor(ms / 1000);
+  }
+
+  private formatMinorUnits(minor: string | null | undefined): string {
+    if (!minor) return '0.00';
+    const n = Number(minor);
+    return Number.isFinite(n) ? (n / 100).toFixed(2) : '0.00';
+  }
+
+  private getPlanName(priceId?: string): string {
+    const plans: Record<string, string> = {
+      pri_01kr05y9cq25yt75ey1ddkpger: 'Basic Monthly',
+      pri_01kr07scygf6jf4a2xbvra76y6: 'Basic Yearly',
+      pri_01kr07vbve5a770reznmza9hdq: 'Pro Monthly',
+      pri_01kr07vyv692rrj6gn8m57e683: 'Pro Yearly',
+      pri_01kr07xbjrdw0jztyfta1xfqre: 'Enterprise Monthly',
+      pri_01kr07xy7sty2xhwcqjgzny8x4: 'Enterprise Yearly',
+    };
+    return priceId ? plans[priceId] || priceId : 'Unknown';
   }
 }

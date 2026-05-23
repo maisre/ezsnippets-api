@@ -6,24 +6,24 @@ const DEFAULT_PLANS = [
   {
     name: 'Basic',
     priceIds: [
-      'price_1T7oWwBCIaRH2MSXeaIC22S7',
-      'price_1T7oWyBCIaRH2MSXa7dFawYC',
+      'pri_01kr05y9cq25yt75ey1ddkpger',
+      'pri_01kr07scygf6jf4a2xbvra76y6',
     ],
     limits: { maxPages: 3, maxLayouts: 1, maxSnippets: 50 },
   },
   {
     name: 'Pro',
     priceIds: [
-      'price_1T7oX0BCIaRH2MSX8fA87eOt',
-      'price_1T7oX1BCIaRH2MSX9EqkbIi9',
+      'pri_01kr07vbve5a770reznmza9hdq',
+      'pri_01kr07vyv692rrj6gn8m57e683',
     ],
     limits: { maxPages: 25, maxLayouts: 10, maxSnippets: 500 },
   },
   {
     name: 'Enterprise',
     priceIds: [
-      'price_1T7oX3BCIaRH2MSXeILwubbY',
-      'price_1T7oX5BCIaRH2MSX4MpR0WmU',
+      'pri_01kr07xbjrdw0jztyfta1xfqre',
+      'pri_01kr07xy7sty2xhwcqjgzny8x4',
     ],
     limits: { maxPages: -1, maxLayouts: -1, maxSnippets: -1 },
   },

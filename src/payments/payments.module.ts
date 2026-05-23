@@ -14,15 +14,21 @@ export class PaymentsModule {
       providers: [
         PaymentsService,
         {
-          provide: 'STRIPE_API_KEY',
+          provide: 'PADDLE_API_KEY',
           useFactory: (configService: ConfigService) =>
-            configService.get('STRIPE_API_KEY'),
+            configService.get('PADDLE_API_KEY'),
           inject: [ConfigService],
         },
         {
-          provide: 'STRIPE_WEBHOOK_SECRET',
+          provide: 'PADDLE_WEBHOOK_SECRET',
           useFactory: (configService: ConfigService) =>
-            configService.get('STRIPE_WEBHOOK_SECRET'),
+            configService.get('PADDLE_WEBHOOK_SECRET'),
+          inject: [ConfigService],
+        },
+        {
+          provide: 'PADDLE_ENVIRONMENT',
+          useFactory: (configService: ConfigService) =>
+            configService.get('PADDLE_ENVIRONMENT') ?? 'sandbox',
           inject: [ConfigService],
         },
         {

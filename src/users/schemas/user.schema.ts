@@ -9,4 +9,10 @@ export const UserSchema = new mongoose.Schema({
     ref: 'org',
     required: false,
   },
+  // Incremented whenever the password changes. Embedded in issued JWTs and
+  // checked on every request so a password reset invalidates existing tokens.
+  tokenVersion: {
+    type: Number,
+    default: 0,
+  },
 });

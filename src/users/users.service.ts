@@ -34,7 +34,11 @@ export class UsersService {
     hashedPassword: string,
   ): Promise<User | null> {
     return this.userModel
-      .findByIdAndUpdate(userId, { password: hashedPassword }, { new: true })
+      .findByIdAndUpdate(
+        userId,
+        { password: hashedPassword, $inc: { tokenVersion: 1 } },
+        { new: true },
+      )
       .exec();
   }
 }

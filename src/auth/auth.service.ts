@@ -63,6 +63,7 @@ export class AuthService {
       email: user.email,
       sub: user._id,
       activeOrg: org._id,
+      tokenVersion: user.tokenVersion,
     };
 
     await this.sqsService.sendMessage(this.emailQueueUrl, {
@@ -81,6 +82,7 @@ export class AuthService {
       email: user._doc.email,
       sub: user._doc._id,
       activeOrg: user._doc.activeOrg,
+      tokenVersion: user._doc.tokenVersion,
     };
     return {
       access_token: this.jwtService.sign(payload),

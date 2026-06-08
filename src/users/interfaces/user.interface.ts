@@ -5,4 +5,5 @@ export interface User extends Document {
   readonly email: string;
   readonly password: string;
   readonly activeOrg?: Types.ObjectId;
+  readonly tokenVersion: number;
 }

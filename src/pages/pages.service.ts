@@ -31,6 +31,15 @@ export class PagesService {
     return this.pageModel.findOne({ _id: id, org: orgId }).exec();
   }
 
+  // Load a page without an org filter, so callers can authorize against its
+  // owning org (used by upload presign to scope uploads by resource).
+  async findById(id: string): Promise<Page | null> {
+    if (!Types.ObjectId.isValid(id)) {
+      return null;
+    }
+    return this.pageModel.findById(id).exec();
+  }
+
   async findForOrg(orgId: string): Promise<Page[]> {
     if (!Types.ObjectId.isValid(orgId)) {
       return [];

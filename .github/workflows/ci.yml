@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build
+        run: npx nest build
+
+      - name: Unit tests
+        run: npm test
+
+      - name: E2E tests
+        run: npm run test:e2e
+
+      # Advisory: the codebase predates CI linting and has many existing
+      # warnings, so lint runs report-only for now (does not fail the build).
+      - name: Lint (advisory)
+        continue-on-error: true
+        run: npx eslint "{src,apps,libs,test}/**/*.ts"

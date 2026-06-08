@@ -1,15 +1,17 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { PaymentService } from './payments.service';
+import { PaymentsService } from './payments.service';
 
-describe('PaymentService', () => {
-  let service: PaymentService;
+describe('PaymentsService', () => {
+  let service: PaymentsService;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      providers: [PaymentService],
-    }).compile();
+      providers: [PaymentsService],
+    })
+      .useMocker((token) => (typeof token === 'string' ? 'test' : {}))
+      .compile();
 
-    service = module.get<PaymentService>(PaymentService);
+    service = module.get<PaymentsService>(PaymentsService);
   });
 
   it('should be defined', () => {

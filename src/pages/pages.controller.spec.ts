@@ -7,7 +7,9 @@ describe('PagesController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [PagesController],
-    }).compile();
+    })
+      .useMocker((token) => (typeof token === 'string' ? 'test' : {}))
+      .compile();
 
     controller = module.get<PagesController>(PagesController);
   });

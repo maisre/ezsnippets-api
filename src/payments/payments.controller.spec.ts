@@ -7,7 +7,9 @@ describe('PaymentsController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [PaymentsController],
-    }).compile();
+    })
+      .useMocker((token) => (typeof token === 'string' ? 'test' : {}))
+      .compile();
 
     controller = module.get<PaymentsController>(PaymentsController);
   });

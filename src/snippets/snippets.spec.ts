@@ -1,18 +1,20 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { Snippets } from './snippets';
+import { SnippetsService } from './snippets.service';
 
-describe('Snippets', () => {
-  let provider: Snippets;
+describe('SnippetsService', () => {
+  let service: SnippetsService;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      providers: [Snippets],
-    }).compile();
+      providers: [SnippetsService],
+    })
+      .useMocker((token) => (typeof token === 'string' ? 'test' : {}))
+      .compile();
 
-    provider = module.get<Snippets>(Snippets);
+    service = module.get<SnippetsService>(SnippetsService);
   });
 
   it('should be defined', () => {
-    expect(provider).toBeDefined();
+    expect(service).toBeDefined();
   });
 });

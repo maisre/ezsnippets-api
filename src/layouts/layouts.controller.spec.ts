@@ -7,7 +7,9 @@ describe('LayoutsController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [LayoutsController],
-    }).compile();
+    })
+      .useMocker((token) => (typeof token === 'string' ? 'test' : {}))
+      .compile();
 
     controller = module.get<LayoutsController>(LayoutsController);
   });

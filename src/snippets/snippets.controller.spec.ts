@@ -7,7 +7,9 @@ describe('SnippetsController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [SnippetsController],
-    }).compile();
+    })
+      .useMocker((token) => (typeof token === 'string' ? 'test' : {}))
+      .compile();
 
     controller = module.get<SnippetsController>(SnippetsController);
   });

@@ -2,7 +2,17 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { AuthGuard, PassportStrategy } from '@nestjs/passport';
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { Request } from 'express';
 import { UsersService } from '../users/users.service';
+import { SESSION_COOKIE } from './session-cookie';
+
+// Lets the editor (and any cross-subdomain client) authenticate via the
+// HttpOnly ez_session cookie, while the SPA keeps using the Bearer header.
+function cookieExtractor(req: Request): string | null {
+  const cookies = (req as Request & { cookies?: Record<string, string> })
+    .cookies;
+  return cookies?.[SESSION_COOKIE] ?? null;
+}
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -11,7 +21,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     private readonly usersService: UsersService,
   ) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+        cookieExtractor,
+      ]),
       ignoreExpiration: false,
       secretOrKey: configService.getOrThrow<string>('JWT_SECRET'),
     });

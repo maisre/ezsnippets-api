@@ -1,6 +1,7 @@
 import {
   Controller,
   Request,
+  Res,
   Get,
   Headers,
   HttpCode,
@@ -8,6 +9,7 @@ import {
   UseGuards,
   Body,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { AppService } from './app.service';
 import { LocalAuthGuard } from './auth/local.strategy';
 import { AuthService } from './auth/auth.service';
@@ -15,6 +17,11 @@ import { JwtAuthGuard } from './auth/jwt.strategy';
 import { SignupDto } from './auth/dto/signup.dto';
 import { ForgotPasswordDto } from './auth/dto/forgot-password.dto';
 import { ResetPasswordDto } from './auth/dto/reset-password.dto';
+import {
+  SESSION_COOKIE,
+  sessionCookieOptions,
+  clearSessionCookieOptions,
+} from './auth/session-cookie';
 
 @Controller()
 export class AppController {
@@ -29,20 +36,30 @@ export class AppController {
   }
 
   @Post('auth/signup')
-  async signup(@Body() signupDto: SignupDto) {
-    return this.authService.signup(signupDto.email, signupDto.password);
+  async signup(
+    @Body() signupDto: SignupDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authService.signup(
+      signupDto.email,
+      signupDto.password,
+    );
+    res.cookie(SESSION_COOKIE, result.access_token, sessionCookieOptions());
+    return result;
   }
 
   @UseGuards(LocalAuthGuard)
   @Post('auth/login')
-  async login(@Request() req) {
-    return this.authService.login(req.user);
+  async login(@Request() req, @Res({ passthrough: true }) res: Response) {
+    const result = await this.authService.login(req.user);
+    res.cookie(SESSION_COOKIE, result.access_token, sessionCookieOptions());
+    return result;
   }
 
-  @UseGuards(JwtAuthGuard)
   @Post('auth/logout')
-  async logout(@Request() req) {
-    return req.logout(() => {});
+  @HttpCode(204)
+  logout(@Res({ passthrough: true }) res: Response) {
+    res.clearCookie(SESSION_COOKIE, clearSessionCookieOptions());
   }
 
   @Post('auth/forgot-password')

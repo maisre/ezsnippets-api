@@ -13,6 +13,7 @@ import { RedisModule } from './redis/redis.module';
 import { OrgsModule } from './orgs/orgs.module';
 import { PlansModule } from './plans/plans.module';
 import { SqsModule } from './sqs/sqs.module';
+import { UploadsModule } from './uploads/uploads.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { SqsModule } from './sqs/sqs.module';
     LayoutsModule,
     OrgsModule,
     PlansModule,
+    UploadsModule,
   ],
   controllers: [AppController],
   providers: [

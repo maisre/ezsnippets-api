@@ -1,10 +1,6 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import {
-  S3Client,
-  PutObjectCommand,
-  PutObjectTaggingCommand,
-} from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { S3Client, PutObjectTaggingCommand } from '@aws-sdk/client-s3';
+import { createPresignedPost } from '@aws-sdk/s3-presigned-post';
 import { randomUUID } from 'crypto';
 
 // Allowed image content-types -> file extension. SVG is intentionally excluded
@@ -18,18 +14,24 @@ const ALLOWED_TYPES: Record<string, string> = {
 
 // Tag applied at upload time. The S3 lifecycle rule expires objects still
 // tagged lifecycle=temp after 7 days; markSaved() flips it to lifecycle=saved.
-const TEMP_TAG = 'lifecycle=temp';
+// As a presigned-POST field, tagging must be an XML <Tagging> document rather
+// than the key=value form the x-amz-tagging PUT header takes.
+const TEMP_TAGGING_XML =
+  '<Tagging><TagSet><Tag><Key>lifecycle</Key><Value>temp</Value></Tag></TagSet></Tagging>';
 const PRESIGN_TTL_SECONDS = 300; // 5 minutes
-// Advisory cap returned to clients. Hard enforcement at S3 requires a presigned
-// POST policy (content-length-range); PUT can't enforce size on its own. The
-// frontend checks this before uploading. See follow-up note in the tracker.
+// Hard cap enforced by S3 via the presigned-POST content-length-range
+// condition: an over-size upload is rejected with 400 EntityTooLarge, so a
+// tampered client can't bypass it. The frontend also checks maxBytes up front
+// for a friendlier error before the upload starts.
 const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MB
 
 export interface PresignedUpload {
   key: string;
   uploadUrl: string;
   assetUrl: string;
-  headers: Record<string, string>;
+  // Form fields the client must append (in order) before the file when POSTing
+  // to uploadUrl as multipart/form-data. The file must be appended last.
+  fields: Record<string, string>;
   maxBytes: number;
 }
 
@@ -60,23 +62,26 @@ export class UploadsService {
     }
 
     const key = `uploads/${orgId}/${randomUUID()}.${ext}`;
-    const command = new PutObjectCommand({
+    // Presigned POST (not PUT) so the content-length-range condition is part of
+    // the signed policy and enforced by S3. Every value in Fields is also added
+    // as an exact-match condition, so the client can't swap the key, type, or
+    // tag without breaking the signature.
+    const { url, fields } = await createPresignedPost(this.s3, {
       Bucket: this.bucket,
       Key: key,
-      ContentType: contentType,
-      Tagging: TEMP_TAG,
-    });
-    const uploadUrl = await getSignedUrl(this.s3, command, {
-      expiresIn: PRESIGN_TTL_SECONDS,
+      Conditions: [['content-length-range', 1, MAX_UPLOAD_BYTES]],
+      Fields: {
+        'Content-Type': contentType,
+        tagging: TEMP_TAGGING_XML,
+      },
+      Expires: PRESIGN_TTL_SECONDS,
     });
 
     return {
       key,
-      uploadUrl,
+      uploadUrl: url,
       assetUrl: this.assetUrl(key),
-      // The client MUST send exactly these headers on the PUT or the signature
-      // won't match.
-      headers: { 'Content-Type': contentType, 'x-amz-tagging': TEMP_TAG },
+      fields,
       maxBytes: MAX_UPLOAD_BYTES,
     };
   }

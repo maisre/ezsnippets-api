@@ -38,8 +38,11 @@ describe('UploadsService', () => {
       expect(res.key).toMatch(/^uploads\/org1\/[a-f0-9-]+\.png$/);
       expect(res.uploadUrl).toContain('https://');
       expect(res.assetUrl).toBe(`https://assets.example.com/${res.key}`);
-      expect(res.headers['x-amz-tagging']).toBe('lifecycle=temp');
-      expect(res.headers['Content-Type']).toBe('image/png');
+      expect(res.maxBytes).toBe(5 * 1024 * 1024);
+      // POST policy fields the client echoes back to S3.
+      expect(res.fields['Content-Type']).toBe('image/png');
+      expect(res.fields.tagging).toContain('<Value>temp</Value>');
+      expect(res.fields.key).toBe(res.key);
     });
   });
 

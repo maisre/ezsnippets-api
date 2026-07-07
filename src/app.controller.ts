@@ -56,6 +56,20 @@ export class AppController {
     return result;
   }
 
+  // Slides the ez_session cookie forward for an already-authenticated caller
+  // (Bearer or existing cookie). The editor heartbeats this so an open session
+  // never lapses; the Angular app calls it right before opening the editor.
+  @UseGuards(JwtAuthGuard)
+  @Post('auth/session-cookie')
+  @HttpCode(204)
+  async refreshSessionCookie(
+    @Request() req,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const token = await this.authService.issueSessionToken(req.user.userId);
+    res.cookie(SESSION_COOKIE, token, sessionCookieOptions());
+  }
+
   @Post('auth/logout')
   @HttpCode(204)
   logout(@Res({ passthrough: true }) res: Response) {

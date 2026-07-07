@@ -3,6 +3,7 @@ import {
   Injectable,
   ConflictException,
   BadRequestException,
+  UnauthorizedException,
   Logger,
 } from '@nestjs/common';
 import { Model } from 'mongoose';
@@ -87,6 +88,25 @@ export class AuthService {
     return {
       access_token: this.jwtService.sign(payload),
     };
+  }
+
+  // Re-mint a session JWT for an already-authenticated user. Backs the
+  // /auth/session-cookie refresh endpoint so the editor's short-lived
+  // ez_session cookie can slide forward (heartbeat) without a fresh login.
+  // Re-reads the user so the new token carries the current tokenVersion —
+  // a password reset still invalidates it on the next request.
+  async issueSessionToken(userId: string): Promise<string> {
+    const user = await this.usersService.findById(userId);
+    if (!user) {
+      throw new UnauthorizedException();
+    }
+    const payload = {
+      email: user.email,
+      sub: String(user._id),
+      activeOrg: user.activeOrg,
+      tokenVersion: user.tokenVersion,
+    };
+    return this.jwtService.sign(payload);
   }
 
   async forgotPassword(email: string): Promise<void> {

@@ -63,6 +63,42 @@ export class LayoutsService {
     return createdLayout.save();
   }
 
+  // Duplicate an existing layout within the caller's active org. Enforces, in
+  // order: (1) the user is a member of the org, (2) the source layout belongs
+  // to that org (via org-scoped findOne), (3) the plan's layout limit. The copy
+  // is built server-side from the stored layout.
+  async duplicate(id: string, orgId: string, userId: string): Promise<Layout> {
+    const isMember = await this.orgsService.isUserMember(orgId, userId);
+    if (!isMember) {
+      throw new ForbiddenException('You do not belong to this organization.');
+    }
+
+    const source = await this.findOne(id, orgId);
+    if (!source) {
+      throw new NotFoundException(`Layout with id ${id} not found`);
+    }
+
+    await this.enforceLimit(orgId);
+
+    const src = source.toObject();
+    // Strip subdocument _ids so the copied subPages get fresh ones.
+    const subPages = (src.subPages || []).map(
+      ({ _id, ...rest }: any) => rest,
+    );
+
+    const createdLayout = new this.layoutModel({
+      name: `${source.name} (copy)`,
+      siteName: source.siteName,
+      description: source.description,
+      nav: src.nav,
+      footer: src.footer,
+      subPages,
+      org: new Types.ObjectId(orgId),
+      createdBy: new Types.ObjectId(userId),
+    });
+    return createdLayout.save();
+  }
+
   async update(
     id: string,
     updateLayoutDto: UpdateLayoutDto,

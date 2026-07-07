@@ -68,6 +68,40 @@ export class PagesService {
     return createdPage.save();
   }
 
+  // Duplicate an existing page within the caller's active org. Enforces, in
+  // order: (1) the user is a member of the org, (2) the source page belongs to
+  // that org (via org-scoped findOne), (3) the plan's page limit. The copy is
+  // built server-side from the stored page so the client can't fabricate its
+  // contents.
+  async duplicate(id: string, orgId: string, userId: string): Promise<Page> {
+    const isMember = await this.orgsService.isUserMember(orgId, userId);
+    if (!isMember) {
+      throw new ForbiddenException('You do not belong to this organization.');
+    }
+
+    const source = await this.findOne(id, orgId);
+    if (!source) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+
+    await this.enforceLimit(orgId);
+
+    // Strip subdocument _ids so the copied snippets get fresh ones.
+    const snippets = (source.toObject().snippets || []).map(
+      ({ _id, ...rest }: any) => rest,
+    );
+
+    const createdPage = new this.pageModel({
+      name: `${source.name} (copy)`,
+      siteName: source.siteName,
+      description: source.description,
+      snippets,
+      org: new Types.ObjectId(orgId),
+      createdBy: new Types.ObjectId(userId),
+    });
+    return createdPage.save();
+  }
+
   async update(
     id: string,
     updatePageDto: UpdatePageDto,

@@ -55,6 +55,15 @@ export class LayoutsController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Post(':id/duplicate')
+  async duplicate(
+    @Param('id') id: string,
+    @Request() req,
+  ): Promise<Layout> {
+    return this.layoutsService.duplicate(id, req.user.activeOrg, req.user.userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Post(':id/customize')
   async customize(
     @Param('id') id: string,

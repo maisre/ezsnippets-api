@@ -117,6 +117,8 @@ export class PagesService {
       updateData.siteName = updatePageDto.siteName;
     if (updatePageDto.description !== undefined)
       updateData.description = updatePageDto.description;
+    if (updatePageDto.textVariant !== undefined)
+      updateData.textVariant = updatePageDto.textVariant;
     if (updatePageDto.snippets !== undefined) {
       updateData.snippets = updatePageDto.snippets;
     }
@@ -156,11 +158,14 @@ export class PagesService {
       (s): s is NonNullable<typeof s> =>
         s != null && !!s.textReplacement && s.textReplacement.length > 0,
     );
+    // Seed the AI from the generic English variant (the representative text),
+    // falling back to the lorem placeholder if a token has no english. The raw
+    // `original` snippet text is intentionally not used.
     const snippetsInput = validSnippets.map((s) => ({
       snippetId: String(s._id),
       replacements: s.textReplacement!.map((tr: any) => ({
         token: tr.token,
-        original: tr.original || tr.replacement || '',
+        original: tr.english || tr.replacement || '',
       })),
     }));
 
@@ -175,7 +180,7 @@ export class PagesService {
       const updatedPage = await this.pageModel
         .findOneAndUpdate(
           { _id: id, org: orgId },
-          { $set: { snippets: updatedSnippets } },
+          { $set: { snippets: updatedSnippets, textVariant: 'customized' } },
           { new: true },
         )
         .exec();
@@ -205,10 +210,11 @@ export class PagesService {
       return obj;
     });
 
+    // Switch the page to the customized variant so the new AI text renders.
     const updatedPage = await this.pageModel
       .findOneAndUpdate(
         { _id: id, org: orgId },
-        { $set: { snippets: updatedSnippets } },
+        { $set: { snippets: updatedSnippets, textVariant: 'customized' } },
         { new: true },
       )
       .exec();

@@ -1,4 +1,4 @@
-import { IsArray, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsIn, IsOptional, IsString } from 'class-validator';
 import { SnippetAbstract } from '../interfaces/snippet-abstract.interface';
 
 export class UpdatePageDto {
@@ -13,6 +13,10 @@ export class UpdatePageDto {
   @IsString()
   @IsOptional()
   description?: string;
+
+  @IsIn(['lorem', 'generic', 'customized'])
+  @IsOptional()
+  textVariant?: 'lorem' | 'generic' | 'customized';
 
   @IsArray()
   @IsOptional()

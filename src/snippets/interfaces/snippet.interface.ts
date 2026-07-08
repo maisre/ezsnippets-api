@@ -10,6 +10,8 @@ export interface Snippet extends Document {
     token: string;
     replacement: string;
     original: string;
+    // Genericized English variant — the base for AI customization.
+    english?: string;
   }>;
   readonly imageReplacement?: Array<{
     token: string;

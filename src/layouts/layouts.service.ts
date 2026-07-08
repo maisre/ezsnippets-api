@@ -171,11 +171,12 @@ export class LayoutsService {
       (s): s is NonNullable<typeof s> =>
         s != null && !!s.textReplacement && s.textReplacement.length > 0,
     );
+    // Seed the AI from the generic English variant (see pages.service).
     const snippetsInput = validSnippets.map((s) => ({
       snippetId: String(s._id),
       replacements: s.textReplacement!.map((tr: any) => ({
         token: tr.token,
-        original: tr.original || tr.replacement || '',
+        original: tr.english || tr.replacement || '',
       })),
     }));
 

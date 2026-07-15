@@ -9,5 +9,11 @@ export interface SnippetAbstract extends Document {
     token: string;
     replacement: string;
   }>;
+  // Page-scoped image overrides (uploaded/stock image URLs chosen in the
+  // editor). Stored on the page, never on the shared snippet.
+  readonly imageReplacementOverride?: Array<{
+    token: string;
+    replacement: string;
+  }>;
   readonly aiCustomized?: boolean;
 }

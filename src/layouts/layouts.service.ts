@@ -1,4 +1,10 @@
-import { Inject, Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Model, Types } from 'mongoose';
 import { Layout } from './interfaces/layout.interface';
 import { CreateLayoutDto } from './dto/create-layout.dto';
@@ -7,15 +13,20 @@ import { OpenaiService } from '../openai';
 import { SnippetsService } from '../snippets/snippets.service';
 import { OrgsService } from '../orgs/orgs.service';
 import { PlansService } from '../plans/plans.service';
+import { ShutterstockService } from '../shutterstock';
+import { targetAspectFor, slotShapeFor } from '../shutterstock/target-dimensions';
 
 @Injectable()
 export class LayoutsService {
+  private readonly logger = new Logger(LayoutsService.name);
+
   constructor(
     @Inject('LAYOUTS_MODEL') private readonly layoutModel: Model<Layout>,
     private readonly openaiService: OpenaiService,
     private readonly snippetsService: SnippetsService,
     private readonly orgsService: OrgsService,
     private readonly plansService: PlansService,
+    private readonly shutterstockService: ShutterstockService,
   ) {}
 
   async findAll(): Promise<Layout[]> {
@@ -278,6 +289,168 @@ export class LayoutsService {
       throw new NotFoundException(`Layout with id ${id} not found`);
     }
 
+    return updatedLayout;
+  }
+
+  // Fill the layout's image slots with stock photos. Same contract as
+  // PagesService.customizeImages, but has to walk the three places a layout
+  // keeps snippet references: nav, footer and subPages[].snippets[].
+  async customizeImages(
+    id: string,
+    orgId: string,
+    options: { direction?: string; replaceExisting?: boolean } = {},
+  ): Promise<Layout> {
+    const layout = await this.findOne(id, orgId);
+    if (!layout) {
+      throw new NotFoundException(`Layout with id ${id} not found`);
+    }
+
+    // Every snippet-abstract position in the layout, flattened.
+    const refs: any[] = [];
+    if ((layout.nav as any)?.id) refs.push(layout.nav);
+    if ((layout.footer as any)?.id) refs.push(layout.footer);
+    (layout.subPages || []).forEach((sp: any) => {
+      (sp.snippets || []).forEach((s: any) => refs.push(s));
+    });
+
+    const snippetDocs = await Promise.all(
+      refs.map((ref) => this.snippetsService.findOne(String(ref.id))),
+    );
+
+    const slots: Array<{
+      snippetId: string;
+      token: string;
+      shape?: string;
+      context?: string;
+      targetAspect: number | null;
+    }> = [];
+    const seen = new Set<string>();
+
+    refs.forEach((ref, index) => {
+      const snippet = snippetDocs[index];
+      if (!snippet?.imageReplacement?.length) return;
+
+      const filled = new Set(
+        (ref.imageReplacementOverride || [])
+          .filter((o: any) => o?.replacement)
+          .map((o: any) => o.token),
+      );
+
+      const context = (snippet.textReplacement || [])
+        .map((tr: any) => tr.english || tr.replacement || '')
+        .filter(Boolean)
+        .slice(0, 3)
+        .join(' | ')
+        .slice(0, 200);
+
+      snippet.imageReplacement.forEach((ir: any) => {
+        if (!options.replaceExisting && filled.has(ir.token)) return;
+
+        const key = `${String(snippet._id)}::${ir.token}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+
+        slots.push({
+          snippetId: String(snippet._id),
+          token: ir.token,
+          shape: slotShapeFor(ir.replacement) ?? undefined,
+          context: context || undefined,
+          targetAspect: targetAspectFor(ir.replacement),
+        });
+      });
+    });
+
+    if (!slots.length) {
+      return layout;
+    }
+
+    const { slots: queries } = await this.openaiService.deriveImageQueries({
+      name: layout.name,
+      siteName: layout.siteName,
+      description: layout.description,
+      direction: options.direction,
+      slots: slots.map(({ targetAspect, ...slot }) => slot),
+    });
+
+    const aspectByKey = new Map(
+      slots.map((s) => [`${s.snippetId}::${s.token}`, s.targetAspect]),
+    );
+
+    const picks = await Promise.all(
+      queries.map(async (q) => {
+        const key = `${q.snippetId}::${q.token}`;
+        try {
+          const image = await this.shutterstockService.findBestMatch(
+            q.query,
+            aspectByKey.get(key) ?? null,
+          );
+          return image ? { snippetId: q.snippetId, token: q.token, image } : null;
+        } catch (error) {
+          this.logger.warn(
+            `Stock search failed for ${key} ("${q.query}"): ${String(error)}`,
+          );
+          return null;
+        }
+      }),
+    );
+
+    const picksBySnippet = new Map<string, Array<{ token: string; image: any }>>();
+    for (const pick of picks) {
+      if (!pick) continue;
+      const list = picksBySnippet.get(pick.snippetId) || [];
+      list.push({ token: pick.token, image: pick.image });
+      picksBySnippet.set(pick.snippetId, list);
+    }
+
+    if (!picksBySnippet.size) {
+      return layout;
+    }
+
+    // Applies picks to one snippet reference, preserving any override the run
+    // didn't touch. Replacement is written as a unit so a stale shutterstockId
+    // can never outlive the image it belonged to.
+    const applyPicks = (ref: any) => {
+      const obj = ref.toObject ? ref.toObject() : { ...ref };
+      const forSnippet = picksBySnippet.get(String(ref.id));
+      if (!forSnippet?.length) return obj;
+
+      const overrides = new Map<string, any>(
+        (obj.imageReplacementOverride || []).map((o: any) => [o.token, o]),
+      );
+      for (const { token, image } of forSnippet) {
+        overrides.set(token, {
+          token,
+          replacement: image.previewUrl,
+          shutterstockId: image.id,
+        });
+      }
+      obj.imageReplacementOverride = Array.from(overrides.values());
+      obj.aiImagesPopulated = true;
+      return obj;
+    };
+
+    const updateData: any = {};
+    if ((layout.nav as any)?.id) updateData.nav = applyPicks(layout.nav);
+    if ((layout.footer as any)?.id) updateData.footer = applyPicks(layout.footer);
+    if (layout.subPages) {
+      updateData.subPages = layout.subPages.map((sp: any) => {
+        const spObj = sp.toObject ? sp.toObject() : { ...sp };
+        spObj.snippets = (sp.snippets || []).map((s: any) => applyPicks(s));
+        return spObj;
+      });
+    }
+
+    const updatedLayout = await this.layoutModel
+      .findOneAndUpdate(
+        { _id: id, org: orgId, deletedAt: null },
+        { $set: updateData },
+        { new: true },
+      )
+      .exec();
+
+    if (!updatedLayout) {
+      throw new NotFoundException(`Layout with id ${id} not found`);
+    }
     return updatedLayout;
   }
 

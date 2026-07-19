@@ -1,4 +1,10 @@
-import { Inject, Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import { Model, Types } from 'mongoose';
 import { Page } from './interfaces/page.interface';
 import { CreatePageDto } from './dto/create-page.dto';
@@ -8,9 +14,13 @@ import { OpenaiService } from '../openai';
 import { SnippetsService } from '../snippets/snippets.service';
 import { OrgsService } from '../orgs/orgs.service';
 import { PlansService } from '../plans/plans.service';
+import { ShutterstockService } from '../shutterstock';
+import { targetAspectFor, slotShapeFor } from '../shutterstock/target-dimensions';
 
 @Injectable()
 export class PagesService {
+  private readonly logger = new Logger(PagesService.name);
+
   constructor(
     @Inject('PAGES_MODEL') private readonly pageModel: Model<Page>,
     private pubsub: RedisPubSubService,
@@ -18,6 +28,7 @@ export class PagesService {
     private readonly snippetsService: SnippetsService,
     private readonly orgsService: OrgsService,
     private readonly plansService: PlansService,
+    private readonly shutterstockService: ShutterstockService,
   ) {}
 
   async findAll(): Promise<Page[]> {
@@ -228,6 +239,168 @@ export class PagesService {
       .findOneAndUpdate(
         { _id: id, org: orgId },
         { $set: { snippets: updatedSnippets, textVariant: 'customized' } },
+        { new: true },
+      )
+      .exec();
+
+    if (!updatedPage) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+
+    await this.pubsub.publish('page-updates', {
+      action: 'updated',
+      roomId: id,
+    });
+
+    return updatedPage;
+  }
+
+  // Fill the page's image slots with stock photos: one AI-derived search query
+  // per slot, then the result whose aspect best fits that slot's intended
+  // dimensions.
+  //
+  // Deliberately independent of customize() — separate button, separate OpenAI
+  // call — so re-running text never re-runs images. By default only empty slots
+  // are filled, so a user's hand-picked images survive; pass replaceExisting to
+  // redo everything.
+  async customizeImages(
+    id: string,
+    orgId: string,
+    options: { direction?: string; replaceExisting?: boolean } = {},
+  ): Promise<Page> {
+    const page = await this.findOne(id, orgId);
+    if (!page) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+
+    const snippetDocs = await Promise.all(
+      page.snippets.map((sa: any) =>
+        this.snippetsService.findOne(String(sa.id)),
+      ),
+    );
+
+    // Slots are keyed by snippetId+token, not by position, so duplicate
+    // instances of the same snippet on a page resolve to the same image. That
+    // matches how text overrides already behave.
+    const slots: Array<{
+      snippetId: string;
+      token: string;
+      shape?: string;
+      context?: string;
+      targetAspect: number | null;
+    }> = [];
+    const seen = new Set<string>();
+
+    page.snippets.forEach((sa: any, index: number) => {
+      const snippet = snippetDocs[index];
+      if (!snippet?.imageReplacement?.length) return;
+
+      const filled = new Set(
+        (sa.imageReplacementOverride || [])
+          .filter((o: any) => o?.replacement)
+          .map((o: any) => o.token),
+      );
+
+      // A little nearby copy lets the model tell a hero from an avatar.
+      const context = (snippet.textReplacement || [])
+        .map((tr: any) => tr.english || tr.replacement || '')
+        .filter(Boolean)
+        .slice(0, 3)
+        .join(' | ')
+        .slice(0, 200);
+
+      snippet.imageReplacement.forEach((ir: any) => {
+        if (!options.replaceExisting && filled.has(ir.token)) return;
+
+        const key = `${String(snippet._id)}::${ir.token}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+
+        slots.push({
+          snippetId: String(snippet._id),
+          token: ir.token,
+          shape: slotShapeFor(ir.replacement) ?? undefined,
+          context: context || undefined,
+          targetAspect: targetAspectFor(ir.replacement),
+        });
+      });
+    });
+
+    if (!slots.length) {
+      return page;
+    }
+
+    const { slots: queries } = await this.openaiService.deriveImageQueries({
+      name: page.name,
+      siteName: page.siteName,
+      description: page.description,
+      direction: options.direction,
+      slots: slots.map(({ targetAspect, ...slot }) => slot),
+    });
+
+    const aspectByKey = new Map(
+      slots.map((s) => [`${s.snippetId}::${s.token}`, s.targetAspect]),
+    );
+
+    // Searches run in parallel: a page can hold 5-20 slots and the searches are
+    // unmetered, so sequential would make this unusably slow. One slot failing
+    // must not sink the rest — it just stays on its placeholder.
+    const picks = await Promise.all(
+      queries.map(async (q) => {
+        const key = `${q.snippetId}::${q.token}`;
+        try {
+          const image = await this.shutterstockService.findBestMatch(
+            q.query,
+            aspectByKey.get(key) ?? null,
+          );
+          return image ? { snippetId: q.snippetId, token: q.token, image } : null;
+        } catch (error) {
+          this.logger.warn(
+            `Stock search failed for ${key} ("${q.query}"): ${String(error)}`,
+          );
+          return null;
+        }
+      }),
+    );
+
+    const picksBySnippet = new Map<string, Array<{ token: string; image: any }>>();
+    for (const pick of picks) {
+      if (!pick) continue;
+      const list = picksBySnippet.get(pick.snippetId) || [];
+      list.push({ token: pick.token, image: pick.image });
+      picksBySnippet.set(pick.snippetId, list);
+    }
+
+    if (!picksBySnippet.size) {
+      return page;
+    }
+
+    const updatedSnippets = page.snippets.map((sa: any) => {
+      const obj = sa.toObject ? sa.toObject() : { ...sa };
+      const forSnippet = picksBySnippet.get(String(sa.id));
+      if (!forSnippet?.length) return obj;
+
+      const overrides = new Map<string, any>(
+        (obj.imageReplacementOverride || []).map((o: any) => [o.token, o]),
+      );
+      for (const { token, image } of forSnippet) {
+        // Written as a unit: replacing an override always replaces its id, so a
+        // stale shutterstockId can never outlive the image it belonged to.
+        overrides.set(token, {
+          token,
+          replacement: image.previewUrl,
+          shutterstockId: image.id,
+        });
+      }
+      obj.imageReplacementOverride = Array.from(overrides.values());
+      obj.aiImagesPopulated = true;
+      return obj;
+    });
+
+    const updatedPage = await this.pageModel
+      .findOneAndUpdate(
+        { _id: id, org: orgId, deletedAt: null },
+        { $set: { snippets: updatedSnippets } },
         { new: true },
       )
       .exec();

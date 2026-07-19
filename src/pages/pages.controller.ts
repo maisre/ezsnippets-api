@@ -20,6 +20,7 @@ import { PagesService } from './pages.service';
 import { Page } from './interfaces/page.interface';
 import { CreatePageDto } from './dto/create-page.dto';
 import { UpdatePageDto } from './dto/update-page.dto';
+import { CustomizeImagesDto } from './dto/customize-images.dto';
 import { SnippetsService } from '../snippets/snippets.service';
 import { JwtAuthGuard } from '../auth/jwt.strategy';
 
@@ -81,6 +82,19 @@ export class PagesController {
     @Request() req,
   ): Promise<Page> {
     return this.pagesService.customize(id, req.user.activeOrg);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/customize-images')
+  async customizeImages(
+    @Param('id') id: string,
+    @Body() dto: CustomizeImagesDto,
+    @Request() req,
+  ): Promise<Page> {
+    return this.pagesService.customizeImages(id, req.user.activeOrg, {
+      direction: dto?.direction,
+      replaceExisting: dto?.replaceExisting,
+    });
   }
 
   @UseGuards(JwtAuthGuard)

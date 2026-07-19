@@ -7,9 +7,10 @@ import { OpenaiModule } from '../openai';
 import { SnippetsModule } from '../snippets/snippets.module';
 import { OrgsModule } from '../orgs/orgs.module';
 import { PlansModule } from '../plans/plans.module';
+import { ShutterstockModule } from '../shutterstock';
 
 @Module({
-  imports: [DatabaseModule, OpenaiModule.forRootAsync(), SnippetsModule, OrgsModule, forwardRef(() => PlansModule)],
+  imports: [DatabaseModule, OpenaiModule.forRootAsync(), SnippetsModule, OrgsModule, forwardRef(() => PlansModule), ShutterstockModule],
   controllers: [LayoutsController],
   providers: [LayoutsService, ...layoutProviders],
   exports: [LayoutsService],

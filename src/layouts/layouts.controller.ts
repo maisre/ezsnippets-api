@@ -16,6 +16,7 @@ import { LayoutsService } from './layouts.service';
 import { Layout } from './interfaces/layout.interface';
 import { CreateLayoutDto } from './dto/create-layout.dto';
 import { UpdateLayoutDto } from './dto/update-layout.dto';
+import { CustomizeImagesDto } from '../pages/dto/customize-images.dto';
 import { JwtAuthGuard } from '../auth/jwt.strategy';
 
 @Controller('layouts')
@@ -73,6 +74,19 @@ export class LayoutsController {
     @Request() req,
   ): Promise<Layout> {
     return this.layoutsService.customize(id, req.user.activeOrg);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/customize-images')
+  async customizeImages(
+    @Param('id') id: string,
+    @Body() dto: CustomizeImagesDto,
+    @Request() req,
+  ): Promise<Layout> {
+    return this.layoutsService.customizeImages(id, req.user.activeOrg, {
+      direction: dto?.direction,
+      replaceExisting: dto?.replaceExisting,
+    });
   }
 
   @UseGuards(JwtAuthGuard)

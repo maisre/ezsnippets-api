@@ -46,7 +46,16 @@ export class UploadsService {
   );
 
   constructor() {
-    this.s3 = new S3Client({ region: process.env.AWS_REGION || 'us-east-1' });
+    // AWS_ENDPOINT_URL is only set when pointing at LocalStack. There we must
+    // also force path-style addressing: LocalStack can't route a presigned POST
+    // sent to the virtual-host URL (bucket.localhost:4566) and answers with
+    // "Unable to find operation for request to service s3: POST /". Real S3
+    // keeps virtual-host addressing, so this stays a local-only branch.
+    const endpoint = process.env.AWS_ENDPOINT_URL;
+    this.s3 = new S3Client({
+      region: process.env.AWS_REGION || 'us-east-1',
+      ...(endpoint ? { endpoint, forcePathStyle: true } : {}),
+    });
   }
 
   async createPresignedUpload(

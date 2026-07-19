@@ -28,7 +28,9 @@ export class PagesService {
     if (!Types.ObjectId.isValid(id) || !Types.ObjectId.isValid(orgId)) {
       return null;
     }
-    return this.pageModel.findOne({ _id: id, org: orgId }).exec();
+    return this.pageModel
+      .findOne({ _id: id, org: orgId, deletedAt: null })
+      .exec();
   }
 
   // Load a page without an org filter, so callers can authorize against its
@@ -37,19 +39,30 @@ export class PagesService {
     if (!Types.ObjectId.isValid(id)) {
       return null;
     }
-    return this.pageModel.findById(id).exec();
+    return this.pageModel.findOne({ _id: id, deletedAt: null }).exec();
   }
 
+  // Returns active *and* archived pages so the dashboard can list archived
+  // ones separately; only soft-deleted pages are hidden.
   async findForOrg(orgId: string): Promise<Page[]> {
     if (!Types.ObjectId.isValid(orgId)) {
       return [];
     }
-    return this.pageModel.find({ org: orgId }).exec();
+    return this.pageModel.find({ org: orgId, deletedAt: null }).exec();
   }
 
+  // Drives both plan enforcement and the /plans/usage display, so archived and
+  // soft-deleted pages are excluded from both. `deletedAt: null` also matches
+  // pre-existing documents that have no such field.
   async countForOrg(orgId: string): Promise<number> {
     if (!Types.ObjectId.isValid(orgId)) return 0;
-    return this.pageModel.countDocuments({ org: orgId }).exec();
+    return this.pageModel
+      .countDocuments({
+        org: orgId,
+        status: { $ne: 'archived' },
+        deletedAt: null,
+      })
+      .exec();
   }
 
   async create(createPageDto: CreatePageDto, orgId: string, userId: string): Promise<Page> {
@@ -229,6 +242,68 @@ export class PagesService {
     });
 
     return updatedPage;
+  }
+
+  // Archive or restore a page. Restoring re-enters the plan count, so it has to
+  // re-check the limit — otherwise archiving three pages, creating three more,
+  // and restoring the originals would leave an org over its cap.
+  async setArchived(
+    id: string,
+    orgId: string,
+    archived: boolean,
+  ): Promise<Page> {
+    const page = await this.findOne(id, orgId);
+    if (!page) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+
+    if (!archived && page.status === 'archived') {
+      await this.enforceLimit(orgId);
+    }
+
+    const updatedPage = await this.pageModel
+      .findOneAndUpdate(
+        { _id: id, org: orgId, deletedAt: null },
+        { $set: { status: archived ? 'archived' : 'active' } },
+        { new: true },
+      )
+      .exec();
+
+    if (!updatedPage) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+
+    // Archiving takes the page offline in ez-view; tell any connected viewers.
+    await this.pubsub.publish('page-updates', {
+      action: 'updated',
+      roomId: id,
+    });
+    return updatedPage;
+  }
+
+  // Soft delete: the document is kept so it can be recovered manually, but it
+  // is hidden from every read path and drops out of the plan count.
+  async remove(id: string, orgId: string): Promise<void> {
+    if (!Types.ObjectId.isValid(id) || !Types.ObjectId.isValid(orgId)) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+
+    const deletedPage = await this.pageModel
+      .findOneAndUpdate(
+        { _id: id, org: orgId, deletedAt: null },
+        { $set: { deletedAt: new Date() } },
+        { new: true },
+      )
+      .exec();
+
+    if (!deletedPage) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+
+    await this.pubsub.publish('page-updates', {
+      action: 'updated',
+      roomId: id,
+    });
   }
 
   private async enforceLimit(orgId: string): Promise<void> {

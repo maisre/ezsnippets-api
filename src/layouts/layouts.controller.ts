@@ -3,6 +3,9 @@ import {
   Get,
   Post,
   Put,
+  Patch,
+  Delete,
+  HttpCode,
   Param,
   NotFoundException,
   Request,
@@ -70,6 +73,26 @@ export class LayoutsController {
     @Request() req,
   ): Promise<Layout> {
     return this.layoutsService.customize(id, req.user.activeOrg);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/archive')
+  async archive(@Param('id') id: string, @Request() req): Promise<Layout> {
+    return this.layoutsService.setArchived(id, req.user.activeOrg, true);
+  }
+
+  // May throw ForbiddenException if restoring would exceed the plan limit.
+  @UseGuards(JwtAuthGuard)
+  @Patch(':id/restore')
+  async restore(@Param('id') id: string, @Request() req): Promise<Layout> {
+    return this.layoutsService.setArchived(id, req.user.activeOrg, false);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id')
+  @HttpCode(204)
+  async remove(@Param('id') id: string, @Request() req): Promise<void> {
+    return this.layoutsService.remove(id, req.user.activeOrg);
   }
 }
 

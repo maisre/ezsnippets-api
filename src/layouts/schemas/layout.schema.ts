@@ -10,6 +10,16 @@ export const LayoutSchema = new mongoose.Schema(
     nav: { type: Object, required: false },
     footer: { type: Object, required: false },
     subPages: Array<SubPage>,
+    // Archived layouts are parked: they stop counting toward the org's plan
+    // limit but stay listed in the dashboard and can be restored (which
+    // re-checks the limit).
+    status: {
+      type: String,
+      enum: ['active', 'archived'],
+      default: 'active',
+    },
+    // Soft delete. Null (or absent, on pre-existing documents) means live.
+    deletedAt: { type: Date, default: null },
     org: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'org',

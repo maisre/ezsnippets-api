@@ -26,19 +26,32 @@ export class LayoutsService {
     if (!Types.ObjectId.isValid(id) || !Types.ObjectId.isValid(orgId)) {
       return null;
     }
-    return this.layoutModel.findOne({ _id: id, org: orgId }).exec();
+    return this.layoutModel
+      .findOne({ _id: id, org: orgId, deletedAt: null })
+      .exec();
   }
 
+  // Returns active *and* archived layouts so the dashboard can list archived
+  // ones separately; only soft-deleted layouts are hidden.
   async findForOrg(orgId: string): Promise<Layout[]> {
     if (!Types.ObjectId.isValid(orgId)) {
       return [];
     }
-    return this.layoutModel.find({ org: orgId }).exec();
+    return this.layoutModel.find({ org: orgId, deletedAt: null }).exec();
   }
 
+  // Drives both plan enforcement and the /plans/usage display, so archived and
+  // soft-deleted layouts are excluded from both. `deletedAt: null` also matches
+  // pre-existing documents that have no such field.
   async countForOrg(orgId: string): Promise<number> {
     if (!Types.ObjectId.isValid(orgId)) return 0;
-    return this.layoutModel.countDocuments({ org: orgId }).exec();
+    return this.layoutModel
+      .countDocuments({
+        org: orgId,
+        status: { $ne: 'archived' },
+        deletedAt: null,
+      })
+      .exec();
   }
 
   async create(
@@ -266,6 +279,57 @@ export class LayoutsService {
     }
 
     return updatedLayout;
+  }
+
+  // Archive or restore a layout. Restoring re-enters the plan count, so it has
+  // to re-check the limit — otherwise archiving, creating replacements, and
+  // restoring the originals would leave an org over its cap.
+  async setArchived(
+    id: string,
+    orgId: string,
+    archived: boolean,
+  ): Promise<Layout> {
+    const layout = await this.findOne(id, orgId);
+    if (!layout) {
+      throw new NotFoundException(`Layout with id ${id} not found`);
+    }
+
+    if (!archived && layout.status === 'archived') {
+      await this.enforceLimit(orgId);
+    }
+
+    const updatedLayout = await this.layoutModel
+      .findOneAndUpdate(
+        { _id: id, org: orgId, deletedAt: null },
+        { $set: { status: archived ? 'archived' : 'active' } },
+        { new: true },
+      )
+      .exec();
+
+    if (!updatedLayout) {
+      throw new NotFoundException(`Layout with id ${id} not found`);
+    }
+    return updatedLayout;
+  }
+
+  // Soft delete: the document is kept so it can be recovered manually, but it
+  // is hidden from every read path and drops out of the plan count.
+  async remove(id: string, orgId: string): Promise<void> {
+    if (!Types.ObjectId.isValid(id) || !Types.ObjectId.isValid(orgId)) {
+      throw new NotFoundException(`Layout with id ${id} not found`);
+    }
+
+    const deletedLayout = await this.layoutModel
+      .findOneAndUpdate(
+        { _id: id, org: orgId, deletedAt: null },
+        { $set: { deletedAt: new Date() } },
+        { new: true },
+      )
+      .exec();
+
+    if (!deletedLayout) {
+      throw new NotFoundException(`Layout with id ${id} not found`);
+    }
   }
 
   private async enforceLimit(orgId: string): Promise<void> {

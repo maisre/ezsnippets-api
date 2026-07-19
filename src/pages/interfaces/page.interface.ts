@@ -6,6 +6,8 @@ export interface Page extends Document {
   readonly siteName?: string;
   readonly description?: string;
   readonly textVariant?: 'lorem' | 'generic' | 'customized';
+  readonly status?: 'active' | 'archived';
+  readonly deletedAt?: Date | null;
 
   readonly snippets: SnippetAbstract[];
   readonly org: Types.ObjectId;

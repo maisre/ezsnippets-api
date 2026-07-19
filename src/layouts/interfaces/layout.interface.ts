@@ -9,6 +9,8 @@ export interface Layout extends Document {
   readonly nav?: SnippetAbstract;
   readonly footer?: SnippetAbstract;
   readonly subPages: SubPage[];
+  readonly status?: 'active' | 'archived';
+  readonly deletedAt?: Date | null;
   readonly org: Types.ObjectId;
   readonly createdBy?: Types.ObjectId;
 

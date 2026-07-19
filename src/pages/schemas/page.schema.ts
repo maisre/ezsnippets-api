@@ -15,6 +15,16 @@ export const PageSchema = new mongoose.Schema(
       default: 'generic',
     },
     snippets: Array<SnippetAbstract>,
+    // Archived pages are parked: they stop counting toward the org's plan limit
+    // and stop rendering publicly in ez-view, but stay listed in the dashboard
+    // and can be restored (which re-checks the limit).
+    status: {
+      type: String,
+      enum: ['active', 'archived'],
+      default: 'active',
+    },
+    // Soft delete. Null (or absent, on pre-existing documents) means live.
+    deletedAt: { type: Date, default: null },
     org: { type: mongoose.Schema.Types.ObjectId, ref: 'org', required: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'user', required: false },
   },

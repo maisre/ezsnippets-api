@@ -30,6 +30,18 @@ export const LayoutSchema = new mongoose.Schema(
       ref: 'user',
       required: false,
     },
+
+    // --- Dashboard thumbnail / screenshot lifecycle ---
+    // Mirrors the fields on PageSchema; see page.schema.ts for the full
+    // rationale (why contentUpdatedAt is separate from `updatedAt`, etc.).
+    // NOTE: ez-view has no standalone layout render route yet, so the
+    // ez-background scanner does not enqueue layouts today — these fields are
+    // in place so the worker can pick them up once that route exists.
+    contentUpdatedAt: { type: Date, default: Date.now },
+    screenshotAt: { type: Date, default: null },
+    thumbnailUrl: { type: String, default: null },
+    screenshotQueuedFor: { type: Date, default: null },
+    screenshotQueuedAt: { type: Date, default: null },
   },
   {
     toJSON: {
@@ -42,3 +54,5 @@ export const LayoutSchema = new mongoose.Schema(
     },
   },
 );
+
+LayoutSchema.index({ contentUpdatedAt: 1, screenshotAt: 1 });

@@ -27,6 +27,26 @@ export const PageSchema = new mongoose.Schema(
     deletedAt: { type: Date, default: null },
     org: { type: mongoose.Schema.Types.ObjectId, ref: 'org', required: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'user', required: false },
+
+    // --- Dashboard thumbnail / screenshot lifecycle ---
+    // See ez-background/src/consumers/screenshot for the debounced capture job.
+    //
+    // contentUpdatedAt is bumped ONLY when rendered content changes (see the
+    // service's touchContent()). It is deliberately NOT Mongoose's `updatedAt`:
+    // ez-background writes thumbnailUrl/screenshotAt back on this same document,
+    // and if that write moved contentUpdatedAt it would re-trigger a capture
+    // forever. The screenshot worker never writes contentUpdatedAt.
+    contentUpdatedAt: { type: Date, default: Date.now },
+    // Stamped by the worker to the contentUpdatedAt value it captured. When it
+    // is null or older than contentUpdatedAt, a fresh screenshot is owed.
+    screenshotAt: { type: Date, default: null },
+    // Rendered card image (the frontend dashboard already reads this).
+    thumbnailUrl: { type: String, default: null },
+    // Enqueue bookkeeping so a burst of ticks can't re-send the same job while
+    // one is in flight; screenshotQueuedAt doubles as a lease so a render that
+    // dies gets picked up again. See screenshot.cron.ts.
+    screenshotQueuedFor: { type: Date, default: null },
+    screenshotQueuedAt: { type: Date, default: null },
   },
   {
     toJSON: {
@@ -39,3 +59,7 @@ export const PageSchema = new mongoose.Schema(
     },
   },
 );
+
+// Backs the ez-background scanner's "which docs are due for a screenshot?"
+// query: it filters/sorts on contentUpdatedAt and compares against screenshotAt.
+PageSchema.index({ contentUpdatedAt: 1, screenshotAt: 1 });

@@ -12,4 +12,11 @@ export interface Page extends Document {
   readonly snippets: SnippetAbstract[];
   readonly org: Types.ObjectId;
   readonly createdBy?: Types.ObjectId;
+
+  // Screenshot lifecycle (see page.schema.ts).
+  readonly contentUpdatedAt?: Date;
+  readonly screenshotAt?: Date | null;
+  readonly thumbnailUrl?: string | null;
+  readonly screenshotQueuedFor?: Date | null;
+  readonly screenshotQueuedAt?: Date | null;
 }

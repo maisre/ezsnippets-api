@@ -147,6 +147,9 @@ export class PagesService {
       updateData.snippets = updatePageDto.snippets;
     }
 
+    // Mark the page dirty so ez-background re-screenshots it once edits settle.
+    updateData.contentUpdatedAt = new Date();
+
     const updatedPage = await this.pageModel
       .findOneAndUpdate(
         { _id: id, org: orgId },
@@ -204,7 +207,13 @@ export class PagesService {
       const updatedPage = await this.pageModel
         .findOneAndUpdate(
           { _id: id, org: orgId },
-          { $set: { snippets: updatedSnippets, textVariant: 'customized' } },
+          {
+          $set: {
+            snippets: updatedSnippets,
+            textVariant: 'customized',
+            contentUpdatedAt: new Date(),
+          },
+        },
           { new: true },
         )
         .exec();
@@ -238,7 +247,13 @@ export class PagesService {
     const updatedPage = await this.pageModel
       .findOneAndUpdate(
         { _id: id, org: orgId },
-        { $set: { snippets: updatedSnippets, textVariant: 'customized' } },
+        {
+          $set: {
+            snippets: updatedSnippets,
+            textVariant: 'customized',
+            contentUpdatedAt: new Date(),
+          },
+        },
         { new: true },
       )
       .exec();
@@ -400,7 +415,7 @@ export class PagesService {
     const updatedPage = await this.pageModel
       .findOneAndUpdate(
         { _id: id, org: orgId, deletedAt: null },
-        { $set: { snippets: updatedSnippets } },
+        { $set: { snippets: updatedSnippets, contentUpdatedAt: new Date() } },
         { new: true },
       )
       .exec();

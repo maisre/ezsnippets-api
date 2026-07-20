@@ -145,6 +145,9 @@ export class LayoutsService {
     if (updateLayoutDto.subPages !== undefined)
       updateData.subPages = updateLayoutDto.subPages;
 
+    // Mark the layout dirty so ez-background re-screenshots it once edits settle.
+    updateData.contentUpdatedAt = new Date();
+
     const updatedLayout = await this.layoutModel
       .findOneAndUpdate(
         { _id: id, org: orgId },
@@ -228,6 +231,8 @@ export class LayoutsService {
         });
       }
 
+      updateData.contentUpdatedAt = new Date();
+
       const updatedLayout = await this.layoutModel
         .findOneAndUpdate(
           { _id: id, org: orgId },
@@ -276,6 +281,8 @@ export class LayoutsService {
         return spObj;
       });
     }
+
+    updateData.contentUpdatedAt = new Date();
 
     const updatedLayout = await this.layoutModel
       .findOneAndUpdate(
@@ -439,6 +446,8 @@ export class LayoutsService {
         return spObj;
       });
     }
+
+    updateData.contentUpdatedAt = new Date();
 
     const updatedLayout = await this.layoutModel
       .findOneAndUpdate(

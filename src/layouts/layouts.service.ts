@@ -142,8 +142,23 @@ export class LayoutsService {
     if (updateLayoutDto.nav !== undefined) updateData.nav = updateLayoutDto.nav;
     if (updateLayoutDto.footer !== undefined)
       updateData.footer = updateLayoutDto.footer;
-    if (updateLayoutDto.subPages !== undefined)
-      updateData.subPages = updateLayoutDto.subPages;
+    if (updateLayoutDto.subPages !== undefined) {
+      // The layout editor owns subpage membership/order but not the page-scoped
+      // customizations (AI text/image overrides, aiCustomized/aiImagesPopulated)
+      // on each subpage snippet. A naive full replace wiped those whenever a
+      // snippet was dragged in or reordered. Merge instead, preserving each
+      // snippet's customizations by id.
+      const existing = await this.layoutModel
+        .findOne({ _id: id, org: orgId })
+        .exec();
+      if (!existing) {
+        throw new NotFoundException(`Layout with id ${id} not found`);
+      }
+      updateData.subPages = this.mergeSubPages(
+        updateLayoutDto.subPages as any[],
+        (existing.subPages as any[]) ?? [],
+      );
+    }
 
     // Mark the layout dirty so ez-background re-screenshots it once edits settle.
     updateData.contentUpdatedAt = new Date();
@@ -161,6 +176,72 @@ export class LayoutsService {
     }
 
     return updatedLayout;
+  }
+
+  /**
+   * Merge a client-supplied set of subpages (membership/order of subpages and
+   * of the snippets within them) onto the stored subpages, preserving each
+   * subpage snippet's page-scoped customization fields. Snippets are matched by
+   * id across all stored subpages, consumed in order, so a snippet keeps its
+   * overrides even if it moves between subpages. A snippet with no stored match
+   * is new and passes through untouched. Only overwrites a customization field
+   * when the client sends a real (non-empty) value.
+   */
+  private mergeSubPages(incoming: any[], stored: any[]): any[] {
+    const nonEmpty = (v: any): boolean =>
+      v != null &&
+      !(typeof v === 'string' && v.trim() === '') &&
+      !(Array.isArray(v) && v.length === 0) &&
+      !(
+        typeof v === 'object' &&
+        !Array.isArray(v) &&
+        Object.keys(v).length === 0
+      );
+
+    // Queue of stored snippet abstracts per id, gathered across every stored
+    // subpage in order, consumed positionally.
+    const storedById = new Map<string, any[]>();
+    for (const sp of stored) {
+      const spObj = sp?.toObject ? sp.toObject() : sp;
+      for (const sa of spObj?.snippets ?? []) {
+        const obj = sa?.toObject ? sa.toObject() : { ...sa };
+        const key = String(obj.id);
+        if (!storedById.has(key)) storedById.set(key, []);
+        storedById.get(key)!.push(obj);
+      }
+    }
+
+    return incoming.map((sp) => ({
+      ...sp,
+      snippets: (sp.snippets ?? []).map((inc: any) => {
+        const queue = storedById.get(String(inc.id));
+        const prev = queue && queue.length ? queue.shift() : undefined;
+        if (!prev) {
+          return inc;
+        }
+        return {
+          ...prev,
+          ...inc,
+          cssOverride: nonEmpty(inc.cssOverride)
+            ? inc.cssOverride
+            : prev.cssOverride,
+          jsOverride: nonEmpty(inc.jsOverride)
+            ? inc.jsOverride
+            : prev.jsOverride,
+          htmlOverride: nonEmpty(inc.htmlOverride)
+            ? inc.htmlOverride
+            : prev.htmlOverride,
+          textReplacementOverride: nonEmpty(inc.textReplacementOverride)
+            ? inc.textReplacementOverride
+            : prev.textReplacementOverride,
+          imageReplacementOverride: nonEmpty(inc.imageReplacementOverride)
+            ? inc.imageReplacementOverride
+            : prev.imageReplacementOverride,
+          aiCustomized: inc.aiCustomized ?? prev.aiCustomized,
+          aiImagesPopulated: inc.aiImagesPopulated ?? prev.aiImagesPopulated,
+        };
+      }),
+    }));
   }
 
   async customize(id: string, orgId: string): Promise<Layout> {

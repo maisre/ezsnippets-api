@@ -144,7 +144,23 @@ export class PagesService {
     if (updatePageDto.textVariant !== undefined)
       updateData.textVariant = updatePageDto.textVariant;
     if (updatePageDto.snippets !== undefined) {
-      updateData.snippets = updatePageDto.snippets;
+      // The snippet-list editor (ez-frontend page-edit) owns membership and
+      // order, but not the page-scoped customizations (AI text/image overrides,
+      // aiCustomized/aiImagesPopulated flags) that live on each abstract. A
+      // naive full-array replace here wiped those every time a snippet was
+      // added or reordered. Merge instead: keep the incoming order/membership,
+      // but carry each existing snippet's customizations forward unless the
+      // client sends a real replacement value.
+      const existing = await this.pageModel
+        .findOne({ _id: id, org: orgId })
+        .exec();
+      if (!existing) {
+        throw new NotFoundException(`Page with id ${id} not found`);
+      }
+      updateData.snippets = this.mergeSnippets(
+        updatePageDto.snippets as any[],
+        existing.snippets as any[],
+      );
     }
 
     // Mark the page dirty so ez-background re-screenshots it once edits settle.
@@ -167,6 +183,69 @@ export class PagesService {
       roomId: id,
     });
     return updatedPage;
+  }
+
+  /**
+   * Merge a client-supplied snippet list (order + membership) onto the page's
+   * stored snippet abstracts, preserving each snippet's page-scoped
+   * customization fields. Snippets are matched by id positionally, so a page
+   * that lists the same snippet twice keeps each instance's own overrides.
+   * A snippet with no stored match is new and passes through untouched.
+   *
+   * Customization fields are only overwritten when the incoming payload carries
+   * a real (non-empty) value — this endpoint is the snippet-list editor, so a
+   * missing/blank override means "leave it alone", not "clear it". The override
+   * editors (ez-view save, customize/customizeImages) manage clearing by
+   * writing whole arrays.
+   */
+  private mergeSnippets(incoming: any[], stored: any[]): any[] {
+    const nonEmpty = (v: any): boolean =>
+      v != null &&
+      !(typeof v === 'string' && v.trim() === '') &&
+      !(Array.isArray(v) && v.length === 0) &&
+      !(
+        typeof v === 'object' &&
+        !Array.isArray(v) &&
+        Object.keys(v).length === 0
+      );
+
+    // Queue of stored abstracts per id, consumed in order so duplicate
+    // instances of the same snippet match up positionally.
+    const storedById = new Map<string, any[]>();
+    for (const sa of stored ?? []) {
+      const obj = sa?.toObject ? sa.toObject() : { ...sa };
+      const key = String(obj.id);
+      if (!storedById.has(key)) storedById.set(key, []);
+      storedById.get(key)!.push(obj);
+    }
+
+    return incoming.map((inc) => {
+      const queue = storedById.get(String(inc.id));
+      const prev = queue && queue.length ? queue.shift() : undefined;
+      if (!prev) {
+        // Newly added snippet — nothing to preserve.
+        return inc;
+      }
+      return {
+        ...prev,
+        ...inc,
+        cssOverride: nonEmpty(inc.cssOverride)
+          ? inc.cssOverride
+          : prev.cssOverride,
+        jsOverride: nonEmpty(inc.jsOverride) ? inc.jsOverride : prev.jsOverride,
+        htmlOverride: nonEmpty(inc.htmlOverride)
+          ? inc.htmlOverride
+          : prev.htmlOverride,
+        textReplacementOverride: nonEmpty(inc.textReplacementOverride)
+          ? inc.textReplacementOverride
+          : prev.textReplacementOverride,
+        imageReplacementOverride: nonEmpty(inc.imageReplacementOverride)
+          ? inc.imageReplacementOverride
+          : prev.imageReplacementOverride,
+        aiCustomized: inc.aiCustomized ?? prev.aiCustomized,
+        aiImagesPopulated: inc.aiImagesPopulated ?? prev.aiImagesPopulated,
+      };
+    });
   }
 
   async customize(id: string, orgId: string): Promise<Page> {

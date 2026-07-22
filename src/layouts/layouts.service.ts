@@ -6,6 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Model, Types } from 'mongoose';
+import { exportSiteZip } from '../export/site-export';
 import { Layout } from './interfaces/layout.interface';
 import { CreateLayoutDto } from './dto/create-layout.dto';
 import { UpdateLayoutDto } from './dto/update-layout.dto';
@@ -570,6 +571,75 @@ export class LayoutsService {
       throw new NotFoundException(`Layout with id ${id} not found`);
     }
     return updatedLayout;
+  }
+
+  private readonly viewUrl = process.env.VIEW_URL || 'http://localhost:3100';
+
+  // Shutterstock images used across the layout (nav, footer, and every subpage
+  // snippet), for the finalize licensing hand-off. Deduped by shutterstockId.
+  async getLicensing(
+    id: string,
+    orgId: string,
+  ): Promise<{
+    images: Array<{
+      shutterstockId: string;
+      previewUrl: string;
+      token: string;
+      uses: number;
+    }>;
+  }> {
+    const layout = await this.findOne(id, orgId);
+    if (!layout) {
+      throw new NotFoundException(`Layout with id ${id} not found`);
+    }
+
+    const byId = new Map<
+      string,
+      { shutterstockId: string; previewUrl: string; token: string; uses: number }
+    >();
+    const collect = (ref: any) => {
+      for (const o of ref?.imageReplacementOverride || []) {
+        if (!o?.shutterstockId) continue;
+        const existing = byId.get(o.shutterstockId);
+        if (existing) {
+          existing.uses += 1;
+        } else {
+          byId.set(o.shutterstockId, {
+            shutterstockId: o.shutterstockId,
+            previewUrl: o.replacement,
+            token: o.token,
+            uses: 1,
+          });
+        }
+      }
+    };
+    if ((layout.nav as any)?.id) collect(layout.nav);
+    if ((layout.footer as any)?.id) collect(layout.footer);
+    for (const sp of (layout.subPages as any[]) || []) {
+      for (const s of sp.snippets || []) collect(s);
+    }
+    return { images: [...byId.values()] };
+  }
+
+  // Build a downloadable static-site zip for a layout. Renders via ez-view with
+  // ?chrome=false so the subpage-switcher overlay is left out of the export.
+  async exportZip(
+    id: string,
+    orgId: string,
+  ): Promise<{ buffer: Buffer; filename: string }> {
+    const layout = await this.findOne(id, orgId);
+    if (!layout) {
+      throw new NotFoundException(`Layout with id ${id} not found`);
+    }
+    const { images } = await this.getLicensing(id, orgId);
+    const csv =
+      'shutterstock_id,uses\n' +
+      images.map((i) => `${i.shutterstockId},${i.uses}`).join('\n');
+    return exportSiteZip({
+      renderUrl: `${this.viewUrl}/view/layout/${id}?chrome=false`,
+      name: layout.name || 'layout',
+      licensingCsv: csv,
+    });
   }
 
   // Archive or restore a layout. Restoring re-enters the plan count, so it has

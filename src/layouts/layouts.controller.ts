@@ -7,11 +7,13 @@ import {
   Delete,
   HttpCode,
   Param,
+  Res,
   NotFoundException,
   Request,
   UseGuards,
   Body,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { LayoutsService } from './layouts.service';
 import { Layout } from './interfaces/layout.interface';
 import { CreateLayoutDto } from './dto/create-layout.dto';
@@ -92,6 +94,33 @@ export class LayoutsController {
       replaceExisting: dto?.replaceExisting,
       onlyMissing: dto?.onlyMissing,
     });
+  }
+
+  // Shutterstock images the user must license before publishing the download.
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/licensing')
+  async getLicensing(@Param('id') id: string, @Request() req) {
+    return this.layoutsService.getLicensing(id, req.user.activeOrg);
+  }
+
+  // Download the layout as a self-contained static-site zip.
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/download')
+  async download(
+    @Param('id') id: string,
+    @Request() req,
+    @Res() res: Response,
+  ): Promise<void> {
+    const { buffer, filename } = await this.layoutsService.exportZip(
+      id,
+      req.user.activeOrg,
+    );
+    res.set({
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length': String(buffer.length),
+    });
+    res.end(buffer);
   }
 
   @UseGuards(JwtAuthGuard)

@@ -102,6 +102,13 @@ export class PagesController {
     });
   }
 
+  // Shutterstock images the user must license before publishing the download.
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/licensing')
+  async getLicensing(@Param('id') id: string, @Request() req) {
+    return this.pagesService.getLicensing(id, req.user.activeOrg);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Patch(':id/archive')
   async archive(@Param('id') id: string, @Request() req): Promise<Page> {

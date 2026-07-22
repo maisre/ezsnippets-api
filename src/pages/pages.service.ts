@@ -542,6 +542,50 @@ export class PagesService {
     return updatedPage;
   }
 
+  // The Shutterstock images used on a page, for the "finalize" licensing
+  // hand-off. Pages carry watermarked preview comps; the customer licenses the
+  // real assets themselves before publishing, so this is the id list they need.
+  // Deduped by shutterstockId (a comp reused across snippets is licensed once),
+  // with a usage count.
+  async getLicensing(
+    id: string,
+    orgId: string,
+  ): Promise<{
+    images: Array<{
+      shutterstockId: string;
+      previewUrl: string;
+      token: string;
+      uses: number;
+    }>;
+  }> {
+    const page = await this.findOne(id, orgId);
+    if (!page) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+
+    const byId = new Map<
+      string,
+      { shutterstockId: string; previewUrl: string; token: string; uses: number }
+    >();
+    for (const sa of page.snippets as any[]) {
+      for (const o of sa.imageReplacementOverride || []) {
+        if (!o?.shutterstockId) continue;
+        const existing = byId.get(o.shutterstockId);
+        if (existing) {
+          existing.uses += 1;
+        } else {
+          byId.set(o.shutterstockId, {
+            shutterstockId: o.shutterstockId,
+            previewUrl: o.replacement,
+            token: o.token,
+            uses: 1,
+          });
+        }
+      }
+    }
+    return { images: [...byId.values()] };
+  }
+
   // Archive or restore a page. Restoring re-enters the plan count, so it has to
   // re-check the limit — otherwise archiving three pages, creating three more,
   // and restoring the originals would leave an org over its cap.

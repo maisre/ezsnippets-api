@@ -43,6 +43,7 @@
     "cookie-parser": "^1.4.7",
     "dotenv": "^17.2.3",
     "ioredis": "^5.8.2",
+    "jszip": "^3.10.1",
     "mongoose": "^8.18.3",
     "openai": "^6.19.0",
     "passport": "^0.7.0",

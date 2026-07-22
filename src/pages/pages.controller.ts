@@ -109,6 +109,26 @@ export class PagesController {
     return this.pagesService.getLicensing(id, req.user.activeOrg);
   }
 
+  // Download the page as a self-contained static-site zip.
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/download')
+  async download(
+    @Param('id') id: string,
+    @Request() req,
+    @Res() res: Response,
+  ): Promise<void> {
+    const { buffer, filename } = await this.pagesService.exportZip(
+      id,
+      req.user.activeOrg,
+    );
+    res.set({
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length': String(buffer.length),
+    });
+    res.end(buffer);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Patch(':id/archive')
   async archive(@Param('id') id: string, @Request() req): Promise<Page> {

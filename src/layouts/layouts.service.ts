@@ -244,11 +244,19 @@ export class LayoutsService {
     }));
   }
 
-  async customize(id: string, orgId: string): Promise<Layout> {
+  async customize(
+    id: string,
+    orgId: string,
+    options: { onlyMissing?: boolean } = {},
+  ): Promise<Layout> {
     const layout = await this.findOne(id, orgId);
     if (!layout) {
       throw new NotFoundException(`Layout with id ${id} not found`);
     }
+
+    // In onlyMissing mode we only touch snippets never AI-customized, leaving
+    // the rest — and their overrides — untouched.
+    const shouldDo = (ref: any) => !options.onlyMissing || ref.aiCustomized !== true;
 
     // Gather all snippet references from nav, footer, and subPages
     const allSnippetRefs: Array<{ ref: any; path: string; index?: number; subIndex?: number }> = [];
@@ -267,31 +275,36 @@ export class LayoutsService {
       });
     }
 
-    // Load all snippet documents
+    // Load all snippet documents (parallel to allSnippetRefs by index).
     const snippetDocs = await Promise.all(
       allSnippetRefs.map((entry) =>
         this.snippetsService.findOne(String(entry.ref.id)),
       ),
     );
 
-    // Build input: only snippets with textReplacement
-    const validSnippets = snippetDocs.filter(
-      (s): s is NonNullable<typeof s> =>
-        s != null && !!s.textReplacement && s.textReplacement.length > 0,
-    );
+    // Build input: only targeted snippets that have textReplacement.
     // Seed the AI from the generic English variant (see pages.service).
-    const snippetsInput = validSnippets.map((s) => ({
-      snippetId: String(s._id),
-      replacements: s.textReplacement!.map((tr: any) => ({
-        token: tr.token,
-        original: tr.english || tr.replacement || '',
-      })),
-    }));
+    const snippetsInput = allSnippetRefs
+      .map((entry, i) => ({ ref: entry.ref, doc: snippetDocs[i] }))
+      .filter(
+        ({ ref, doc }) =>
+          shouldDo(ref) &&
+          doc != null &&
+          !!doc.textReplacement &&
+          doc.textReplacement.length > 0,
+      )
+      .map(({ doc }) => ({
+        snippetId: String(doc!._id),
+        replacements: doc!.textReplacement!.map((tr: any) => ({
+          token: tr.token,
+          original: tr.english || tr.replacement || '',
+        })),
+      }));
 
-    // Helper to mark a snippet abstract as customized
+    // Helper to mark a snippet abstract as customized (only if targeted).
     const markCustomized = (ref: any) => {
       const obj = ref.toObject ? ref.toObject() : { ...ref };
-      obj.aiCustomized = true;
+      if (shouldDo(ref)) obj.aiCustomized = true;
       return obj;
     };
 
@@ -334,9 +347,11 @@ export class LayoutsService {
       snippets: snippetsInput,
     });
 
-    // Build update data with overrides applied and aiCustomized set
+    // Build update data with overrides applied and aiCustomized set. In
+    // onlyMissing mode, already-customized snippets are left exactly as-is.
     const applyOverride = (ref: any) => {
       const obj = ref.toObject ? ref.toObject() : { ...ref };
+      if (!shouldDo(ref)) return obj;
       const snippetResult = result.snippets.find(
         (rs) => rs.snippetId === String(ref.id),
       );
@@ -386,12 +401,20 @@ export class LayoutsService {
   async customizeImages(
     id: string,
     orgId: string,
-    options: { direction?: string; replaceExisting?: boolean } = {},
+    options: {
+      direction?: string;
+      replaceExisting?: boolean;
+      onlyMissing?: boolean;
+    } = {},
   ): Promise<Layout> {
     const layout = await this.findOne(id, orgId);
     if (!layout) {
       throw new NotFoundException(`Layout with id ${id} not found`);
     }
+
+    // In onlyMissing mode we only touch snippets never image-populated.
+    const shouldDo = (ref: any) =>
+      !options.onlyMissing || ref.aiImagesPopulated !== true;
 
     // Every snippet-abstract position in the layout, flattened.
     const refs: any[] = [];
@@ -415,6 +438,7 @@ export class LayoutsService {
     const seen = new Set<string>();
 
     refs.forEach((ref, index) => {
+      if (!shouldDo(ref)) return;
       const snippet = snippetDocs[index];
       if (!snippet?.imageReplacement?.length) return;
 
@@ -448,71 +472,75 @@ export class LayoutsService {
       });
     });
 
-    if (!slots.length) {
-      return layout;
-    }
-
-    const { slots: queries } = await this.openaiService.deriveImageQueries({
-      name: layout.name,
-      siteName: layout.siteName,
-      description: layout.description,
-      direction: options.direction,
-      slots: slots.map(({ targetAspect, ...slot }) => slot),
-    });
-
-    const aspectByKey = new Map(
-      slots.map((s) => [`${s.snippetId}::${s.token}`, s.targetAspect]),
-    );
-
-    const picks = await Promise.all(
-      queries.map(async (q) => {
-        const key = `${q.snippetId}::${q.token}`;
-        try {
-          const image = await this.shutterstockService.findBestMatch(
-            q.query,
-            aspectByKey.get(key) ?? null,
-          );
-          return image ? { snippetId: q.snippetId, token: q.token, image } : null;
-        } catch (error) {
-          this.logger.warn(
-            `Stock search failed for ${key} ("${q.query}"): ${String(error)}`,
-          );
-          return null;
-        }
-      }),
-    );
-
     const picksBySnippet = new Map<string, Array<{ token: string; image: any }>>();
-    for (const pick of picks) {
-      if (!pick) continue;
-      const list = picksBySnippet.get(pick.snippetId) || [];
-      list.push({ token: pick.token, image: pick.image });
-      picksBySnippet.set(pick.snippetId, list);
+
+    // Skip the OpenAI + Shutterstock round-trip when there's nothing to fill
+    // (e.g. onlyMissing where the new snippets carry no image slots). Targeted
+    // snippets are still marked done below so the "missing" count clears.
+    if (slots.length) {
+      const { slots: queries } = await this.openaiService.deriveImageQueries({
+        name: layout.name,
+        siteName: layout.siteName,
+        description: layout.description,
+        direction: options.direction,
+        slots: slots.map(({ targetAspect, ...slot }) => slot),
+      });
+
+      const aspectByKey = new Map(
+        slots.map((s) => [`${s.snippetId}::${s.token}`, s.targetAspect]),
+      );
+
+      const picks = await Promise.all(
+        queries.map(async (q) => {
+          const key = `${q.snippetId}::${q.token}`;
+          try {
+            const image = await this.shutterstockService.findBestMatch(
+              q.query,
+              aspectByKey.get(key) ?? null,
+            );
+            return image
+              ? { snippetId: q.snippetId, token: q.token, image }
+              : null;
+          } catch (error) {
+            this.logger.warn(
+              `Stock search failed for ${key} ("${q.query}"): ${String(error)}`,
+            );
+            return null;
+          }
+        }),
+      );
+
+      for (const pick of picks) {
+        if (!pick) continue;
+        const list = picksBySnippet.get(pick.snippetId) || [];
+        list.push({ token: pick.token, image: pick.image });
+        picksBySnippet.set(pick.snippetId, list);
+      }
     }
 
-    if (!picksBySnippet.size) {
-      return layout;
-    }
-
-    // Applies picks to one snippet reference, preserving any override the run
-    // didn't touch. Replacement is written as a unit so a stale shutterstockId
-    // can never outlive the image it belonged to.
+    // Applies picks to one snippet reference and marks every targeted ref as
+    // image-populated — even ones with no slots or no successful pick — so a
+    // repeat "missing" run doesn't keep re-targeting them. Non-targeted refs are
+    // left as-is. Replacement is written as a unit so a stale shutterstockId can
+    // never outlive the image it belonged to.
     const applyPicks = (ref: any) => {
       const obj = ref.toObject ? ref.toObject() : { ...ref };
-      const forSnippet = picksBySnippet.get(String(ref.id));
-      if (!forSnippet?.length) return obj;
+      if (!shouldDo(ref)) return obj;
 
-      const overrides = new Map<string, any>(
-        (obj.imageReplacementOverride || []).map((o: any) => [o.token, o]),
-      );
-      for (const { token, image } of forSnippet) {
-        overrides.set(token, {
-          token,
-          replacement: image.previewUrl,
-          shutterstockId: image.id,
-        });
+      const forSnippet = picksBySnippet.get(String(ref.id));
+      if (forSnippet?.length) {
+        const overrides = new Map<string, any>(
+          (obj.imageReplacementOverride || []).map((o: any) => [o.token, o]),
+        );
+        for (const { token, image } of forSnippet) {
+          overrides.set(token, {
+            token,
+            replacement: image.previewUrl,
+            shutterstockId: image.id,
+          });
+        }
+        obj.imageReplacementOverride = Array.from(overrides.values());
       }
-      obj.imageReplacementOverride = Array.from(overrides.values());
       obj.aiImagesPopulated = true;
       return obj;
     };

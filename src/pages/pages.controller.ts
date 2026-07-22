@@ -21,6 +21,7 @@ import { Page } from './interfaces/page.interface';
 import { CreatePageDto } from './dto/create-page.dto';
 import { UpdatePageDto } from './dto/update-page.dto';
 import { CustomizeImagesDto } from './dto/customize-images.dto';
+import { CustomizeDto } from './dto/customize.dto';
 import { SnippetsService } from '../snippets/snippets.service';
 import { JwtAuthGuard } from '../auth/jwt.strategy';
 
@@ -79,9 +80,12 @@ export class PagesController {
   @Post(':id/customize')
   async customize(
     @Param('id') id: string,
+    @Body() dto: CustomizeDto,
     @Request() req,
   ): Promise<Page> {
-    return this.pagesService.customize(id, req.user.activeOrg);
+    return this.pagesService.customize(id, req.user.activeOrg, {
+      onlyMissing: dto?.onlyMissing,
+    });
   }
 
   @UseGuards(JwtAuthGuard)
@@ -94,6 +98,7 @@ export class PagesController {
     return this.pagesService.customizeImages(id, req.user.activeOrg, {
       direction: dto?.direction,
       replaceExisting: dto?.replaceExisting,
+      onlyMissing: dto?.onlyMissing,
     });
   }
 

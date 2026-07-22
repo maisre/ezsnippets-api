@@ -10,4 +10,11 @@ export class CustomizeImagesDto {
    * hand survive. Set true to redo every slot.
    */
   replaceExisting?: boolean;
+
+  /**
+   * Restrict the run to snippets that were never AI image-populated (added
+   * after an earlier run). Snippets already marked aiImagesPopulated are left
+   * untouched. Independent of replaceExisting, which controls per-slot redo.
+   */
+  onlyMissing?: boolean;
 }

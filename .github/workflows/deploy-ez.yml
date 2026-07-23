@@ -1,0 +1,64 @@
+# Deploy ez-api to the lean-EC2 stack (Option A) in the `ez` business account.
+# Build → push to ez ECR → redeploy on the box via SSM. See
+# ez-infra/DEPLOYMENT-OPTIONS.md. Separate from deploy.yml (the EKS/staging path).
+name: Deploy ez-api (ez / lean-EC2)
+
+on:
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: ez-api
+  SERVICE: ez-api
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure AWS credentials (ez account)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.EZ_AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $REGISTRY/$ECR_REPOSITORY:latest .
+          docker push $REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: Redeploy on the box (SSM RunCommand)
+        run: |
+          CMD_ID=$(aws ssm send-command \
+            --document-name AWS-RunShellScript \
+            --targets "Key=tag:ez:role,Values=app" \
+            --comment "deploy $SERVICE" \
+            --parameters commands="cd /opt/ez/compose && ./deploy.sh $SERVICE" \
+            --query Command.CommandId --output text)
+          echo "SSM command: $CMD_ID"
+          for i in $(seq 1 40); do
+            sleep 15
+            STATUS=$(aws ssm list-command-invocations --command-id "$CMD_ID" \
+              --query 'CommandInvocations[0].Status' --output text 2>/dev/null || echo Pending)
+            echo "status: $STATUS"
+            case "$STATUS" in
+              Success) echo "Deploy succeeded"; exit 0 ;;
+              Failed|Cancelled|TimedOut)
+                aws ssm list-command-invocations --command-id "$CMD_ID" --details \
+                  --query 'CommandInvocations[0].CommandPlugins[0].Output' --output text || true
+                echo "Deploy failed"; exit 1 ;;
+            esac
+          done
+          echo "Timed out waiting for SSM command"; exit 1

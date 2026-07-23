@@ -17,6 +17,7 @@ import { OrgsService } from '../orgs/orgs.service';
 import { PlansService } from '../plans/plans.service';
 import { ShutterstockService } from '../shutterstock';
 import { targetAspectFor, slotShapeFor } from '../shutterstock/target-dimensions';
+import { wrapAffiliate, imagePageUrl } from '../shutterstock/affiliate';
 
 @Injectable()
 export class PagesService {
@@ -557,7 +558,12 @@ export class PagesService {
       previewUrl: string;
       token: string;
       uses: number;
+      licenseUrl: string;
     }>;
+    // Whether the server can build a one-click "license all" Collection link on
+    // demand (needs a collections.edit token). The frontend hides the Generate
+    // action when false.
+    collectionsEnabled: boolean;
   }> {
     const page = await this.findOne(id, orgId);
     if (!page) {
@@ -584,7 +590,33 @@ export class PagesService {
         }
       }
     }
-    return { images: [...byId.values()] };
+    return {
+      images: [...byId.values()].map((i) => ({
+        ...i,
+        licenseUrl: wrapAffiliate(imagePageUrl(i.shutterstockId)),
+      })),
+      collectionsEnabled: this.shutterstockService.isCollectionsConfigured,
+    };
+  }
+
+  // Build a shareable, affiliate-attributed "license everything" link on demand:
+  // create a Shutterstock Collection from this page's images and return its
+  // wrapped share URL. Nothing is persisted — an ez-background cron reaps the
+  // collection by age (see SHUTTERSTOCK_COLLECTION_TTL_DAYS).
+  async generateCollectionUrl(
+    id: string,
+    orgId: string,
+  ): Promise<{ licenseAllUrl: string }> {
+    const page = await this.findOne(id, orgId);
+    if (!page) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+    const { images } = await this.getLicensing(id, orgId);
+    const shareUrl = await this.shutterstockService.createShareableCollection(
+      page.name || 'page',
+      images.map((i) => i.shutterstockId),
+    );
+    return { licenseAllUrl: wrapAffiliate(shareUrl) };
   }
 
   // Base URL of ez-view, used to fetch the rendered HTML for export.

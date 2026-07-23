@@ -16,6 +16,7 @@ import { OrgsService } from '../orgs/orgs.service';
 import { PlansService } from '../plans/plans.service';
 import { ShutterstockService } from '../shutterstock';
 import { targetAspectFor, slotShapeFor } from '../shutterstock/target-dimensions';
+import { wrapAffiliate, imagePageUrl } from '../shutterstock/affiliate';
 
 @Injectable()
 export class LayoutsService {
@@ -586,7 +587,9 @@ export class LayoutsService {
       previewUrl: string;
       token: string;
       uses: number;
+      licenseUrl: string;
     }>;
+    collectionsEnabled: boolean;
   }> {
     const layout = await this.findOne(id, orgId);
     if (!layout) {
@@ -618,7 +621,32 @@ export class LayoutsService {
     for (const sp of (layout.subPages as any[]) || []) {
       for (const s of sp.snippets || []) collect(s);
     }
-    return { images: [...byId.values()] };
+    return {
+      images: [...byId.values()].map((i) => ({
+        ...i,
+        licenseUrl: wrapAffiliate(imagePageUrl(i.shutterstockId)),
+      })),
+      collectionsEnabled: this.shutterstockService.isCollectionsConfigured,
+    };
+  }
+
+  // Build a shareable, affiliate-attributed "license everything" link on demand
+  // from this layout's images. Nothing persisted — reaped by age via the
+  // ez-background cron. See pages.service.generateCollectionUrl.
+  async generateCollectionUrl(
+    id: string,
+    orgId: string,
+  ): Promise<{ licenseAllUrl: string }> {
+    const layout = await this.findOne(id, orgId);
+    if (!layout) {
+      throw new NotFoundException(`Layout with id ${id} not found`);
+    }
+    const { images } = await this.getLicensing(id, orgId);
+    const shareUrl = await this.shutterstockService.createShareableCollection(
+      layout.name || 'layout',
+      images.map((i) => i.shutterstockId),
+    );
+    return { licenseAllUrl: wrapAffiliate(shareUrl) };
   }
 
   // Build a downloadable static-site zip for a layout. Renders via ez-view with

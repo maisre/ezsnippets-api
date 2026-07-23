@@ -103,6 +103,14 @@ export class LayoutsController {
     return this.layoutsService.getLicensing(id, req.user.activeOrg);
   }
 
+  // Build a one-click "license all images" Shutterstock Collection link on
+  // demand. Nothing is stored; the collection is reaped by age (ez-background).
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/collection')
+  async generateCollection(@Param('id') id: string, @Request() req) {
+    return this.layoutsService.generateCollectionUrl(id, req.user.activeOrg);
+  }
+
   // Download the layout as a self-contained static-site zip.
   @UseGuards(JwtAuthGuard)
   @Get(':id/download')

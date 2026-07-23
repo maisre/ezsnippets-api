@@ -58,6 +58,95 @@ export class ShutterstockService {
     return !!this.apiToken;
   }
 
+  // Collection management (create/add-items/share) is a separate capability from
+  // image search: it needs an OAuth token carrying the `collections.edit` scope,
+  // tied to a specific Shutterstock account (collections are account-owned). We
+  // gate it behind an explicit flag so a search-only token never attempts these
+  // calls. The cleanup half lives in ez-background (time-based cron).
+  get isCollectionsConfigured(): boolean {
+    return (
+      !!this.apiToken &&
+      process.env.SHUTTERSTOCK_COLLECTIONS_ENABLED === 'true'
+    );
+  }
+
+  // Marker prefix + creation date embedded in every collection we create, so the
+  // ez-background cleanup cron can (a) recognise our own collections and never
+  // touch a human-curated one, and (b) compute age without us persisting
+  // anything. Keep this format in sync with the cron's parser in ez-background.
+  private collectionName(subject: string): string {
+    const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const clean = (subject || 'page').trim().slice(0, 80);
+    return `[ezgen ${date}] ${clean}`;
+  }
+
+  /**
+   * Create a Shutterstock Collection from a list of image ids and return its
+   * public share URL. Built on demand at licensing hand-off — nothing is
+   * persisted our side; the cron reaps it by age. Throws if collections aren't
+   * configured or the API rejects the call.
+   */
+  async createShareableCollection(
+    subject: string,
+    imageIds: string[],
+  ): Promise<string> {
+    if (!this.isCollectionsConfigured) {
+      throw new ServiceUnavailableException(
+        'Shutterstock collections are not configured.',
+      );
+    }
+    if (!imageIds.length) {
+      throw new HttpException(
+        'No Shutterstock images to collect.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const id = await this.collectionsRequest<{ id: string }>(
+      'POST',
+      '/images/collections',
+      { name: this.collectionName(subject) },
+    ).then((r) => r.id);
+
+    await this.collectionsRequest(
+      'POST',
+      `/images/collections/${id}/items`,
+      { items: imageIds.map((imageId) => ({ id: imageId })) },
+    );
+
+    // The public "Copy link" URL. `embed=share_url` returns it directly; fall
+    // back to the canonical path form if the field is absent on some responses.
+    const details = await this.collectionsRequest<{ share_url?: string }>(
+      'GET',
+      `/images/collections/${id}?embed=share_url`,
+    );
+    return details.share_url || `https://www.shutterstock.com/collections/${id}`;
+  }
+
+  private async collectionsRequest<T = unknown>(
+    method: 'GET' | 'POST' | 'DELETE',
+    path: string,
+    body?: unknown,
+  ): Promise<T> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${this.apiToken}`,
+        'User-Agent': 'ez-snippet/1.0',
+        Accept: 'application/json',
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      await this.handleApiError(response);
+    }
+    // Add-items and delete return no body; guard the json parse.
+    const text = await response.text();
+    return (text ? JSON.parse(text) : {}) as T;
+  }
+
   /**
    * Search Shutterstock for preview comps matching `query`.
    *

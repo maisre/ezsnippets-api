@@ -52,6 +52,7 @@ export class OrgsService {
       paddleCustomerId?: string;
       subscriptionId?: string;
       plan?: string;
+      productId?: string;
       subscriptionStatus?: string;
       // Card fields take null to clear them — the customer can remove their
       // saved card in the Paddle portal.

@@ -730,8 +730,11 @@ export class LayoutsService {
       );
     }
 
-    const limits = await this.plansService.getLimitsForPriceId(org.plan);
-    if (!limits || limits.maxLayouts === -1) return; // Unlimited
+    const limits = this.plansService.getLimits({
+      productId: org.productId,
+      priceId: org.plan,
+    });
+    if (limits.maxLayouts === -1) return; // Unlimited
 
     const current = await this.countForOrg(orgId);
     if (current >= limits.maxLayouts) {

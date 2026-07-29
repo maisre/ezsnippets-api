@@ -18,6 +18,8 @@ import {
 import { Model } from 'mongoose';
 import { Org } from '../orgs/interfaces/org.interface';
 import { OrgsService } from '../orgs/orgs.service';
+import { pickPlanRef, PlanRef } from '../plans/plan-catalog';
+import { PlansService } from '../plans/plans.service';
 import { SqsService } from '../sqs/sqs.service';
 
 type SubscriptionUpdate = Parameters<OrgsService['updateSubscription']>[1];
@@ -54,6 +56,7 @@ export class PaymentsService {
     @Inject('WEBHOOK_EVENT_MODEL')
     private readonly webhookEventModel: Model<any>,
     private readonly orgsService: OrgsService,
+    private readonly plansService: PlansService,
     private readonly sqsService: SqsService,
   ) {
     this.paddle = new Paddle(this.apiKey, {
@@ -164,7 +167,7 @@ export class PaymentsService {
       type: 'subscription_canceled',
       orgId,
       orgName: org.name,
-      plan: this.getPlanName(org.plan),
+      plan: this.plansService.planName({ productId: org.productId, priceId: org.plan }),
     });
 
     this.logger.log(`Subscription cancellation scheduled for org ${orgId}`);
@@ -278,11 +281,12 @@ export class PaymentsService {
     const org = await this.orgsService.findOne(orgId);
     if (!org || this.isStale(org, occurredAt)) return;
 
-    const priceId = sub.items[0]?.price?.id;
+    const ref = this.planRefFor(sub);
     await this.orgsService.updateSubscription(orgId, {
       paddleCustomerId: sub.customerId,
       subscriptionId: sub.id,
-      plan: priceId,
+      plan: ref.priceId,
+      productId: ref.productId,
       subscriptionStatus: sub.status,
       currentPeriodEnd: this.toUnixSeconds(sub.currentBillingPeriod?.endsAt),
       cancelAtPeriodEnd: sub.scheduledChange?.action === 'cancel',
@@ -293,7 +297,7 @@ export class PaymentsService {
       type: 'subscription_confirmed',
       orgId,
       orgName: org.name,
-      plan: this.getPlanName(priceId),
+      plan: this.plansService.planName(ref),
     });
 
     this.logger.log(`Subscription activated for org ${orgId}`);
@@ -306,11 +310,12 @@ export class PaymentsService {
     const org = await this.resolveOrg(sub.customData, sub.customerId);
     if (!org || this.isStale(org, occurredAt)) return;
 
-    const priceId = sub.items[0]?.price?.id;
+    const ref = this.planRefFor(sub);
     await this.orgsService.updateSubscription(org.id, {
       paddleCustomerId: sub.customerId,
       subscriptionId: sub.id,
-      plan: priceId,
+      plan: ref.priceId,
+      productId: ref.productId,
       subscriptionStatus: sub.status,
       currentPeriodEnd: this.toUnixSeconds(sub.currentBillingPeriod?.endsAt),
       cancelAtPeriodEnd: sub.scheduledChange?.action === 'cancel',
@@ -327,7 +332,7 @@ export class PaymentsService {
     const org = await this.resolveOrg(sub.customData, sub.customerId);
     if (!org || this.isStale(org, occurredAt)) return;
 
-    const priceId = sub.items[0]?.price?.id;
+    const ref = this.planRefFor(sub);
     // `plan` is left in place so the account page can still name what they had
     // (and offer the same plan back). Access is gated on subscriptionStatus,
     // not on plan being set — see hasActiveSubscription.
@@ -341,7 +346,7 @@ export class PaymentsService {
       type: 'subscription_expired',
       orgId: org.id,
       orgName: org.name,
-      plan: this.getPlanName(priceId),
+      plan: this.plansService.planName(ref),
     });
 
     this.logger.log(`Subscription deleted for org ${org.id}`);
@@ -391,7 +396,7 @@ export class PaymentsService {
         type: 'payment_succeeded',
         orgId: org.id,
         orgName: org.name,
-        plan: this.getPlanName(org.plan),
+        plan: this.plansService.planName({ productId: org.productId, priceId: org.plan }),
         amountPaid: this.formatMinorUnits(total?.grandTotal),
         currency: total?.currencyCode?.toLowerCase() ?? '',
       });
@@ -412,7 +417,7 @@ export class PaymentsService {
       type: 'payment_failed',
       orgId: org.id,
       orgName: org.name,
-      plan: this.getPlanName(org.plan),
+      plan: this.plansService.planName({ productId: org.productId, priceId: org.plan }),
       amountDue: this.formatMinorUnits(total?.grandTotal),
       currency: total?.currencyCode?.toLowerCase() ?? '',
     });
@@ -497,6 +502,19 @@ export class PaymentsService {
     }
   }
 
+  /**
+   * Which of a subscription's items is the plan.
+   *
+   * A subscription can carry several items — a base plan plus add-ons — and
+   * nothing guarantees the plan is first, so prefer the first item whose
+   * product we actually recognise instead of trusting position zero. If none
+   * match, fall back to the first item so the org still records what it bought
+   * and getLimits can report the unmapped product.
+   */
+  private planRefFor(sub: SubscriptionNotification): PlanRef {
+    return pickPlanRef(sub.items, (ref) => !!this.plansService.findTier(ref));
+  }
+
   // Paddle copies a transaction's custom_data onto the subscription it creates,
   // and a subscription's custom_data onto its later transactions — so orgId is
   // on every event in the lifecycle. paddleCustomerId is only the fallback:
@@ -554,15 +572,4 @@ export class PaymentsService {
     return Number.isFinite(n) ? (n / 100).toFixed(2) : '0.00';
   }
 
-  private getPlanName(priceId?: string): string {
-    const plans: Record<string, string> = {
-      pri_01kr05y9cq25yt75ey1ddkpger: 'Basic Monthly',
-      pri_01kr07scygf6jf4a2xbvra76y6: 'Basic Yearly',
-      pri_01kr07vbve5a770reznmza9hdq: 'Pro Monthly',
-      pri_01kr07vyv692rrj6gn8m57e683: 'Pro Yearly',
-      pri_01kr07xbjrdw0jztyfta1xfqre: 'Enterprise Monthly',
-      pri_01kr07xy7sty2xhwcqjgzny8x4: 'Enterprise Yearly',
-    };
-    return priceId ? plans[priceId] || priceId : 'Unknown';
-  }
 }

@@ -4,6 +4,7 @@ import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
 import { paymentsProviders } from './payments.providers';
 import { OrgsModule } from '../orgs/orgs.module';
+import { PlansModule } from '../plans/plans.module';
 import { DatabaseModule } from '../database/database.module';
 
 @Module({})
@@ -12,7 +13,7 @@ export class PaymentsModule {
     return {
       module: PaymentsModule,
       controllers: [PaymentsController],
-      imports: [ConfigModule.forRoot(), OrgsModule, DatabaseModule],
+      imports: [ConfigModule.forRoot(), OrgsModule, PlansModule, DatabaseModule],
       providers: [
         ...paymentsProviders,
         PaymentsService,

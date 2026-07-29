@@ -24,7 +24,10 @@ export interface Org extends Document {
   readonly members: OrgMember[];
   paddleCustomerId?: string;
   subscriptionId?: string;
+  /** Paddle price id — display and history. */
   plan?: string;
+  /** Paddle product id — what entitlements are actually keyed on. */
+  productId?: string;
   subscriptionStatus?: string;
   cardBrand?: string;
   cardLast4?: string;

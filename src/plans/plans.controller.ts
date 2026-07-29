@@ -38,18 +38,16 @@ export class PlansController {
       };
     }
 
-    const [plan, pageCount, layoutCount] = await Promise.all([
-      this.plansService.findByPriceId(org.plan),
+    const ref = { productId: org.productId, priceId: org.plan };
+    const [pageCount, layoutCount] = await Promise.all([
       this.pagesService.countForOrg(orgId),
       this.layoutsService.countForOrg(orgId),
     ]);
 
-    const limits = await this.plansService.getLimitsForPriceId(org.plan);
-
     return {
       hasPlan: true,
-      plan: plan?.name || null,
-      limits,
+      plan: this.plansService.planName(ref),
+      limits: this.plansService.getLimits(ref),
       usage: {
         pages: pageCount,
         layouts: layoutCount,

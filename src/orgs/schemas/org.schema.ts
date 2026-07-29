@@ -21,6 +21,7 @@ export const OrgSchema = new mongoose.Schema(
     paddleCustomerId: { type: String },
     subscriptionId: { type: String },
     plan: { type: String },
+    productId: { type: String },
     subscriptionStatus: { type: String },
     cardBrand: { type: String },
     cardLast4: { type: String },

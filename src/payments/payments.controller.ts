@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Headers,
+  HttpCode,
   Post,
   RawBody,
   Request,
@@ -45,6 +46,9 @@ export class PaymentsController {
     );
   }
 
+  // Paddle documents expecting a 200; Nest would otherwise return 201 for a
+  // POST. Any 2xx may well be accepted, but there's no reason to find out.
+  @HttpCode(200)
   @Post('webhook')
   async handleWebhook(
     @Headers('paddle-signature') signature: string,

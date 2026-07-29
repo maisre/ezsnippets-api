@@ -1,5 +1,6 @@
 import { Controller, Get, Request, UseGuards } from '@nestjs/common';
 import { PlansService } from './plans.service';
+import { PaddleCatalogService } from './paddle-catalog.service';
 import { hasActiveSubscription } from './subscription-status';
 import { OrgsService } from '../orgs/orgs.service';
 import { PagesService } from '../pages/pages.service';
@@ -10,14 +11,21 @@ import { JwtAuthGuard } from '../auth/jwt.strategy';
 export class PlansController {
   constructor(
     private readonly plansService: PlansService,
+    private readonly catalogService: PaddleCatalogService,
     private readonly orgsService: OrgsService,
     private readonly pagesService: PagesService,
     private readonly layoutsService: LayoutsService,
   ) {}
 
+  /**
+   * The pricing page. Prices, trials, and which plans are on sale all come
+   * from Paddle; limits and copy come from our catalog. `source` tells the
+   * client whether it's looking at live data, a cached read, or nothing —
+   * an empty list with source `unavailable` must not render as "no plans".
+   */
   @Get()
   async findAll() {
-    return this.plansService.findAll();
+    return this.catalogService.getCatalog();
   }
 
   @UseGuards(JwtAuthGuard)

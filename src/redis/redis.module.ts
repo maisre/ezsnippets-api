@@ -1,32 +1,23 @@
 import { Global, Module, OnModuleDestroy, Inject } from '@nestjs/common';
-import { CacheModule } from '@nestjs/cache-manager';
-import { redisStore } from 'cache-manager-redis-yet';
 import Redis from 'ioredis';
 import { redisProviders } from './redis.providers';
 import { RedisPubSubService } from './redis-pubsub.service';
 import { REDIS_PUBLISHER, REDIS_SUBSCRIBER } from './redis.constants';
 
+// Redis here is pub/sub only — the publisher/subscriber connections below back
+// the websocket fan-out to ez-view.
+//
+// There was a CacheModule registered here too, configured with cache-manager
+// v5's `{ store }` option. The installed cache-manager is v7, which is Keyv
+// based and ignores that option, so it was silently an in-process memory cache
+// that looked Redis-backed. Nothing consumed it. Removed rather than repaired:
+// a cache that lies about where it stores things is worse than no cache, and
+// the deployed Redis runs without persistence anyway. Wire it up deliberately
+// if and when something actually needs caching.
 @Global()
 @Module({
-  imports: [
-    CacheModule.registerAsync({
-      isGlobal: true,
-      useFactory: async () => ({
-        store: await redisStore({
-          socket: {
-            host: process.env.REDIS_HOST || 'localhost',
-            port: parseInt(process.env.REDIS_PORT || '6379', 10),
-          },
-          password: process.env.REDIS_PASSWORD || undefined,
-          database: parseInt(process.env.REDIS_DB || '0', 10),
-          ttl: parseInt(process.env.CACHE_TTL || '300', 10) * 1000, // Convert to ms
-        }),
-      }),
-    }),
-  ],
   providers: [...redisProviders, RedisPubSubService],
   exports: [
-    CacheModule,
     ...redisProviders,
     RedisPubSubService,
     REDIS_PUBLISHER,

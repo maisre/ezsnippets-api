@@ -43,6 +43,10 @@ lerna-debug.log*
 .env.test.local
 .env.production.local
 .env.local
+# Catches .env.bak and friends — a stray backup of a secrets file is exactly
+# the kind of thing that gets committed by accident.
+.env.*
+!.env.example
 
 # temp directory
 .temp

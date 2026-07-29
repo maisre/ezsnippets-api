@@ -7,7 +7,6 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
-  Environment,
   EventName,
   Paddle,
   type AdjustmentNotification,
@@ -19,7 +18,9 @@ import { Model } from 'mongoose';
 import { Org } from '../orgs/interfaces/org.interface';
 import { OrgsService } from '../orgs/orgs.service';
 import { pickPlanRef, PlanRef } from '../plans/plan-catalog';
+import { PaddleCatalogService } from '../plans/paddle-catalog.service';
 import { PlansService } from '../plans/plans.service';
+import { PADDLE_CLIENT } from '../paddle/paddle.module';
 import { SqsService } from '../sqs/sqs.service';
 
 type SubscriptionUpdate = Parameters<OrgsService['updateSubscription']>[1];
@@ -41,31 +42,28 @@ const HANDLED_EVENTS = new Set<EventName>([
   EventName.PaymentMethodSaved,
   EventName.PaymentMethodDeleted,
   EventName.AdjustmentCreated,
+  // Not billing — these invalidate the cached price catalog so a pricing edit
+  // in the dashboard shows up without waiting for the TTL.
+  EventName.PriceCreated,
+  EventName.PriceUpdated,
+  EventName.ProductUpdated,
 ]);
 
 @Injectable()
 export class PaymentsService {
-  private paddle: Paddle;
   private readonly logger = new Logger(PaymentsService.name);
 
   constructor(
-    @Inject('PADDLE_API_KEY') private readonly apiKey: string,
+    @Inject(PADDLE_CLIENT) private readonly paddle: Paddle,
     @Inject('PADDLE_WEBHOOK_SECRET') private readonly webhookSecret: string,
-    @Inject('PADDLE_ENVIRONMENT') private readonly paddleEnvironment: string,
     @Inject('EMAIL_QUEUE_URL') private readonly emailQueueUrl: string,
     @Inject('WEBHOOK_EVENT_MODEL')
     private readonly webhookEventModel: Model<any>,
     private readonly orgsService: OrgsService,
     private readonly plansService: PlansService,
+    private readonly catalogService: PaddleCatalogService,
     private readonly sqsService: SqsService,
-  ) {
-    this.paddle = new Paddle(this.apiKey, {
-      environment:
-        this.paddleEnvironment === 'production'
-          ? Environment.production
-          : Environment.sandbox,
-    });
-  }
+  ) {}
 
   // Create a Paddle Transaction the frontend will open via Paddle.Checkout.open({ transactionId })
   async createCheckoutSession(
@@ -182,6 +180,13 @@ export class PaymentsService {
       return;
     }
 
+    // The endpoint is publicly reachable, so unsigned junk arrives on its own.
+    // Reject it as a 400 rather than letting unmarshal throw a TypeError that
+    // surfaces as a 500 and clutters the logs.
+    if (!signature) {
+      throw new BadRequestException('Missing paddle-signature header');
+    }
+
     const event = await this.paddle.webhooks.unmarshal(
       payload.toString(),
       this.webhookSecret,
@@ -191,7 +196,14 @@ export class PaymentsService {
     // Anything we don't act on is acked and dropped without touching the
     // database — the destination can stay subscribed to everything without
     // filling the dedup collection with price/payout/report noise.
-    if (!HANDLED_EVENTS.has(event.eventType as EventName)) return;
+    if (!HANDLED_EVENTS.has(event.eventType as EventName)) {
+      this.logger.debug(`Ignoring unhandled ${event.eventType}`);
+      return;
+    }
+
+    // One line per accepted event. Without it, "is the webhook even arriving?"
+    // can only be answered by grepping for the absence of downstream effects.
+    this.logger.log(`Webhook ${event.eventType} ${event.eventId}`);
 
     // Claim the event before doing any work. A redelivery of something we've
     // already handled loses the race here and returns without re-sending
@@ -249,6 +261,11 @@ export class PaymentsService {
         break;
       case EventName.AdjustmentCreated:
         await this.onAdjustmentCreated(event.data);
+        break;
+      case EventName.PriceCreated:
+      case EventName.PriceUpdated:
+      case EventName.ProductUpdated:
+        await this.catalogService.invalidate();
         break;
     }
   }

@@ -1,4 +1,11 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   Environment,
   EventName,
@@ -75,10 +82,73 @@ export class PaymentsService {
     return { transactionId: transaction.id };
   }
 
-  async cancelSubscription(orgId: string): Promise<{ status: string }> {
+  // Billing is owner-only: cancelling or opening the portal affects everyone
+  // in the org, so ordinary members can't do either.
+  private async assertOwner(orgId: string, userId: string): Promise<Org> {
     const org = await this.orgsService.findOne(orgId);
-    if (!org) throw new Error('Organization not found');
-    if (!org.subscriptionId) throw new Error('No active subscription');
+    if (!org) throw new NotFoundException('Organization not found');
+
+    const role = await this.orgsService.getMemberRole(orgId, userId);
+    if (role !== 'owner') {
+      throw new ForbiddenException(
+        'Only the organization owner can manage billing',
+      );
+    }
+    return org;
+  }
+
+  // Authenticated links into Paddle's hosted customer portal: invoices,
+  // payment history, card management, cancellation.
+  //
+  // Owner-only. These URLs are bearer credentials for the whole billing record
+  // — anyone holding one is in, without logging in — so they're never logged,
+  // never stored, and minted fresh per request.
+  async createPortalSession(
+    orgId: string,
+    userId: string,
+  ): Promise<{
+    overviewUrl: string;
+    updatePaymentMethodUrl?: string;
+    cancelUrl?: string;
+  }> {
+    const org = await this.assertOwner(orgId, userId);
+
+    if (!org.paddleCustomerId) {
+      throw new BadRequestException(
+        'No billing account yet — subscribe to a plan first',
+      );
+    }
+
+    const subscriptionIds = org.subscriptionId ? [org.subscriptionId] : [];
+    const session = await this.paddle.customerPortalSessions.create(
+      org.paddleCustomerId,
+      subscriptionIds,
+    );
+
+    // Deep links come back per subscription; match ours rather than assuming
+    // the customer has exactly one.
+    const forSubscription = session.urls.subscriptions.find(
+      (s) => s.id === org.subscriptionId,
+    );
+
+    this.logger.log(`Portal session created for org ${orgId}`);
+    return {
+      overviewUrl: session.urls.general.overview,
+      updatePaymentMethodUrl: forSubscription?.updateSubscriptionPaymentMethod,
+      cancelUrl: forSubscription?.cancelSubscription,
+    };
+  }
+
+  // Kept for support/admin use — the customer-facing path is the portal's
+  // cancel deep link, which runs Paddle's retention flow first.
+  async cancelSubscription(
+    orgId: string,
+    userId: string,
+  ): Promise<{ status: string }> {
+    const org = await this.assertOwner(orgId, userId);
+    if (!org.subscriptionId) {
+      throw new BadRequestException('No active subscription');
+    }
 
     const subscription = await this.paddle.subscriptions.cancel(
       org.subscriptionId,

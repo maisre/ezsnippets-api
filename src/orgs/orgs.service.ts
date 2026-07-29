@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Model, Types } from 'mongoose';
-import { BillingEvent, Org } from './interfaces/org.interface';
+import { BillingEvent, Org, OrgMember } from './interfaces/org.interface';
 
 @Injectable()
 export class OrgsService {
@@ -34,6 +34,16 @@ export class OrgsService {
       })
       .exec();
     return !!org;
+  }
+
+  async getMemberRole(
+    orgId: string,
+    userId: string,
+  ): Promise<OrgMember['role'] | null> {
+    const org = await this.findOne(orgId);
+    if (!org) return null;
+    const member = org.members.find((m) => m.user.toString() === userId);
+    return member?.role ?? null;
   }
 
   async updateSubscription(

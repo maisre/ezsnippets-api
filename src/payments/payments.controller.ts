@@ -26,10 +26,23 @@ export class PaymentsController {
     );
   }
 
+  // Owner-only — enforced in the service, which has the org membership.
+  @UseGuards(JwtAuthGuard)
+  @Post('portal-session')
+  async createPortalSession(@Request() req) {
+    return this.paymentService.createPortalSession(
+      req.user.activeOrg,
+      req.user.userId,
+    );
+  }
+
   @UseGuards(JwtAuthGuard)
   @Post('cancel-subscription')
   async cancelSubscription(@Request() req) {
-    return this.paymentService.cancelSubscription(req.user.activeOrg);
+    return this.paymentService.cancelSubscription(
+      req.user.activeOrg,
+      req.user.userId,
+    );
   }
 
   @Post('webhook')

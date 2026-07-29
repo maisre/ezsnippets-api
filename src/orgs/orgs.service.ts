@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Model, Types } from 'mongoose';
-import { Org } from './interfaces/org.interface';
+import { BillingEvent, Org } from './interfaces/org.interface';
 
 @Injectable()
 export class OrgsService {
@@ -43,15 +43,34 @@ export class OrgsService {
       subscriptionId?: string;
       plan?: string;
       subscriptionStatus?: string;
-      cardBrand?: string;
-      cardLast4?: string;
-      cardExpMonth?: number;
-      cardExpYear?: number;
+      // Card fields take null to clear them — the customer can remove their
+      // saved card in the Paddle portal.
+      cardBrand?: string | null;
+      cardLast4?: string | null;
+      cardExpMonth?: number | null;
+      cardExpYear?: number | null;
       currentPeriodEnd?: number;
       cancelAtPeriodEnd?: boolean;
+      subscriptionEventAt?: Date;
+      billingBlocked?: boolean;
     },
   ): Promise<Org | null> {
     return this.orgModel.findByIdAndUpdate(orgId, data, { new: true }).exec();
+  }
+
+  // Keeps only the most recent 20 — enough to answer "what happened to this
+  // account?" without letting the array grow without bound.
+  async recordBillingEvent(
+    orgId: string,
+    event: BillingEvent,
+  ): Promise<Org | null> {
+    return this.orgModel
+      .findByIdAndUpdate(
+        orgId,
+        { $push: { billingEvents: { $each: [event], $slice: -20 } } },
+        { new: true },
+      )
+      .exec();
   }
 
   async findByPaddleCustomerId(customerId: string): Promise<Org | null> {

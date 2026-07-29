@@ -14,6 +14,7 @@ import { OpenaiService } from '../openai';
 import { SnippetsService } from '../snippets/snippets.service';
 import { OrgsService } from '../orgs/orgs.service';
 import { PlansService } from '../plans/plans.service';
+import { hasActiveSubscription } from '../plans/subscription-status';
 import { ShutterstockService } from '../shutterstock';
 import { targetAspectFor, slotShapeFor } from '../shutterstock/target-dimensions';
 import { wrapAffiliate, imagePageUrl } from '../shutterstock/affiliate';
@@ -723,7 +724,7 @@ export class LayoutsService {
 
   private async enforceLimit(orgId: string): Promise<void> {
     const org = await this.orgsService.findOne(orgId);
-    if (!org?.plan) {
+    if (!hasActiveSubscription(org)) {
       throw new ForbiddenException(
         'No active plan. Subscribe to a plan to create layouts.',
       );

@@ -3,13 +3,36 @@ import {
   Environment,
   EventName,
   Paddle,
+  type AdjustmentNotification,
+  type EventEntity,
   type SubscriptionNotification,
   type TransactionNotification,
 } from '@paddle/paddle-node-sdk';
+import { Model } from 'mongoose';
+import { Org } from '../orgs/interfaces/org.interface';
 import { OrgsService } from '../orgs/orgs.service';
 import { SqsService } from '../sqs/sqs.service';
 
 type SubscriptionUpdate = Parameters<OrgsService['updateSubscription']>[1];
+
+// The events dispatch() acts on. Everything else Paddle sends is acked and
+// ignored, so the notification destination can safely stay subscribed to more
+// than this — but keep the two lists in step when adding a handler.
+const HANDLED_EVENTS = new Set<EventName>([
+  EventName.SubscriptionCreated,
+  EventName.SubscriptionActivated,
+  EventName.SubscriptionTrialing,
+  EventName.SubscriptionPastDue,
+  EventName.SubscriptionPaused,
+  EventName.SubscriptionResumed,
+  EventName.SubscriptionUpdated,
+  EventName.SubscriptionCanceled,
+  EventName.TransactionCompleted,
+  EventName.TransactionPaymentFailed,
+  EventName.PaymentMethodSaved,
+  EventName.PaymentMethodDeleted,
+  EventName.AdjustmentCreated,
+]);
 
 @Injectable()
 export class PaymentsService {
@@ -21,6 +44,8 @@ export class PaymentsService {
     @Inject('PADDLE_WEBHOOK_SECRET') private readonly webhookSecret: string,
     @Inject('PADDLE_ENVIRONMENT') private readonly paddleEnvironment: string,
     @Inject('EMAIL_QUEUE_URL') private readonly emailQueueUrl: string,
+    @Inject('WEBHOOK_EVENT_MODEL')
+    private readonly webhookEventModel: Model<any>,
     private readonly orgsService: OrgsService,
     private readonly sqsService: SqsService,
   ) {
@@ -90,15 +115,52 @@ export class PaymentsService {
       signature,
     );
 
+    // Anything we don't act on is acked and dropped without touching the
+    // database — the destination can stay subscribed to everything without
+    // filling the dedup collection with price/payout/report noise.
+    if (!HANDLED_EVENTS.has(event.eventType as EventName)) return;
+
+    // Claim the event before doing any work. A redelivery of something we've
+    // already handled loses the race here and returns without re-sending
+    // emails or re-applying state.
+    if (!(await this.claimEvent(event))) {
+      this.logger.log(`Ignoring duplicate ${event.eventType} ${event.eventId}`);
+      return;
+    }
+
+    try {
+      await this.dispatch(event);
+    } catch (err) {
+      // Release the claim so Paddle's retry gets a real second attempt rather
+      // than being deduped away.
+      await this.webhookEventModel
+        .deleteOne({ eventId: event.eventId })
+        .exec()
+        .catch(() => undefined);
+      throw err;
+    }
+  }
+
+  private async dispatch(event: EventEntity): Promise<void> {
+    const occurredAt = this.toDate(event.occurredAt);
+
     switch (event.eventType) {
       case EventName.SubscriptionCreated:
-        await this.onSubscriptionCreated(event.data);
+        await this.onSubscriptionCreated(event.data, occurredAt);
         break;
+      // activated/trialing fire around trial starts and conversions, past_due
+      // and paused/resumed around dunning. They all carry the full subscription
+      // entity, so the same handler keeps status and period end in step.
+      case EventName.SubscriptionActivated:
+      case EventName.SubscriptionTrialing:
+      case EventName.SubscriptionPastDue:
+      case EventName.SubscriptionPaused:
+      case EventName.SubscriptionResumed:
       case EventName.SubscriptionUpdated:
-        await this.onSubscriptionUpdated(event.data);
+        await this.onSubscriptionUpdated(event.data, occurredAt);
         break;
       case EventName.SubscriptionCanceled:
-        await this.onSubscriptionCanceled(event.data);
+        await this.onSubscriptionCanceled(event.data, occurredAt);
         break;
       case EventName.TransactionCompleted:
         await this.onTransactionCompleted(event.data);
@@ -106,11 +168,36 @@ export class PaymentsService {
       case EventName.TransactionPaymentFailed:
         await this.onTransactionPaymentFailed(event.data);
         break;
+      // Fires when the customer adds or removes a card in the Paddle portal,
+      // which is the only way the card on file changes between payments.
+      case EventName.PaymentMethodSaved:
+      case EventName.PaymentMethodDeleted:
+        await this.onPaymentMethodChanged(event.data.customerId);
+        break;
+      case EventName.AdjustmentCreated:
+        await this.onAdjustmentCreated(event.data);
+        break;
+    }
+  }
+
+  // Returns false when this event id has already been recorded.
+  private async claimEvent(event: EventEntity): Promise<boolean> {
+    try {
+      await this.webhookEventModel.create({
+        eventId: event.eventId,
+        eventType: event.eventType,
+        occurredAt: this.toDate(event.occurredAt),
+      });
+      return true;
+    } catch (err: any) {
+      if (err?.code === 11000) return false; // duplicate key = already seen
+      throw err;
     }
   }
 
   private async onSubscriptionCreated(
     sub: SubscriptionNotification,
+    occurredAt?: Date,
   ): Promise<void> {
     const orgId = this.extractOrgId(sub.customData);
     if (!orgId) {
@@ -119,7 +206,7 @@ export class PaymentsService {
     }
 
     const org = await this.orgsService.findOne(orgId);
-    if (!org) return;
+    if (!org || this.isStale(org, occurredAt)) return;
 
     const priceId = sub.items[0]?.price?.id;
     await this.orgsService.updateSubscription(orgId, {
@@ -129,6 +216,7 @@ export class PaymentsService {
       subscriptionStatus: sub.status,
       currentPeriodEnd: this.toUnixSeconds(sub.currentBillingPeriod?.endsAt),
       cancelAtPeriodEnd: sub.scheduledChange?.action === 'cancel',
+      subscriptionEventAt: occurredAt,
     });
 
     await this.sqsService.sendMessage(this.emailQueueUrl, {
@@ -143,16 +231,20 @@ export class PaymentsService {
 
   private async onSubscriptionUpdated(
     sub: SubscriptionNotification,
+    occurredAt?: Date,
   ): Promise<void> {
-    const org = await this.orgsService.findByPaddleCustomerId(sub.customerId);
-    if (!org) return;
+    const org = await this.resolveOrg(sub.customData, sub.customerId);
+    if (!org || this.isStale(org, occurredAt)) return;
 
     const priceId = sub.items[0]?.price?.id;
     await this.orgsService.updateSubscription(org.id, {
+      paddleCustomerId: sub.customerId,
+      subscriptionId: sub.id,
       plan: priceId,
       subscriptionStatus: sub.status,
       currentPeriodEnd: this.toUnixSeconds(sub.currentBillingPeriod?.endsAt),
       cancelAtPeriodEnd: sub.scheduledChange?.action === 'cancel',
+      subscriptionEventAt: occurredAt,
     });
 
     this.logger.log(`Subscription ${sub.status} for org ${org.id}`);
@@ -160,14 +252,19 @@ export class PaymentsService {
 
   private async onSubscriptionCanceled(
     sub: SubscriptionNotification,
+    occurredAt?: Date,
   ): Promise<void> {
-    const org = await this.orgsService.findByPaddleCustomerId(sub.customerId);
-    if (!org) return;
+    const org = await this.resolveOrg(sub.customData, sub.customerId);
+    if (!org || this.isStale(org, occurredAt)) return;
 
     const priceId = sub.items[0]?.price?.id;
+    // `plan` is left in place so the account page can still name what they had
+    // (and offer the same plan back). Access is gated on subscriptionStatus,
+    // not on plan being set — see hasActiveSubscription.
     await this.orgsService.updateSubscription(org.id, {
       subscriptionStatus: sub.status,
       cancelAtPeriodEnd: false,
+      subscriptionEventAt: occurredAt,
     });
 
     await this.sqsService.sendMessage(this.emailQueueUrl, {
@@ -183,14 +280,18 @@ export class PaymentsService {
   private async onTransactionCompleted(
     tx: TransactionNotification,
   ): Promise<void> {
-    if (!tx.customerId) return;
-    const org = await this.orgsService.findByPaddleCustomerId(tx.customerId);
+    const org = await this.resolveOrg(tx.customData, tx.customerId);
     if (!org) return;
 
     const card = tx.payments.find((p) => p.methodDetails?.card)?.methodDetails
       ?.card;
 
     const update: SubscriptionUpdate = {};
+    // First transaction of a new subscription can land before
+    // subscription.created, in which case this is what records the customer id.
+    if (tx.customerId && !org.paddleCustomerId) {
+      update.paddleCustomerId = tx.customerId;
+    }
     if (card) {
       update.cardBrand = card.type;
       update.cardLast4 = card.last4;
@@ -233,8 +334,7 @@ export class PaymentsService {
   private async onTransactionPaymentFailed(
     tx: TransactionNotification,
   ): Promise<void> {
-    if (!tx.customerId) return;
-    const org = await this.orgsService.findByPaddleCustomerId(tx.customerId);
+    const org = await this.resolveOrg(tx.customData, tx.customerId);
     if (!org) return;
 
     const total = tx.details?.totals;
@@ -248,6 +348,120 @@ export class PaymentsService {
     });
 
     this.logger.log(`Payment failed for org ${org.id}`);
+  }
+
+  // The payment_method.* payloads carry no card details, so re-read the
+  // customer's saved methods and mirror whichever card is on file. Re-reading
+  // rather than patching from the event also means an out-of-order
+  // saved/deleted pair still settles on the truth.
+  private async onPaymentMethodChanged(customerId: string): Promise<void> {
+    const org = await this.orgsService.findByPaddleCustomerId(customerId);
+    if (!org) return;
+
+    const methods = await this.paddle.paymentMethods.list(customerId).next();
+    const card = methods.find((method) => method.card)?.card;
+
+    await this.orgsService.updateSubscription(org.id, {
+      cardBrand: card?.type ?? null,
+      cardLast4: card?.last4 ?? null,
+      cardExpMonth: card?.expiryMonth ?? null,
+      cardExpYear: card?.expiryYear ?? null,
+    });
+
+    this.logger.log(
+      card
+        ? `Card on file updated for org ${org.id}`
+        : `Card on file removed for org ${org.id}`,
+    );
+  }
+
+  private async onAdjustmentCreated(
+    adj: AdjustmentNotification,
+  ): Promise<void> {
+    const org = await this.resolveOrg(undefined, adj.customerId);
+    if (!org) return;
+
+    const amount = `${this.formatMinorUnits(adj.totals?.total)} ${adj.currencyCode}`;
+
+    // Every adjustment is mirrored onto the org, whether or not it changes
+    // access, so support questions can be answered without the dashboard.
+    await this.orgsService.recordBillingEvent(org.id, {
+      action: adj.action,
+      amount: this.formatMinorUnits(adj.totals?.total),
+      currency: adj.currencyCode,
+      status: adj.status,
+      reason: adj.reason,
+      adjustmentId: adj.id,
+      transactionId: adj.transactionId,
+      occurredAt: this.toDate(adj.createdAt),
+    });
+
+    switch (adj.action) {
+      // Only a settled chargeback blocks access. `chargeback_warning` is an
+      // early notice from the card network that often reverses, and taking
+      // access away from someone who turns out to be fine is worse than
+      // carrying a possible loss for a few days.
+      case 'chargeback':
+        await this.orgsService.updateSubscription(org.id, {
+          billingBlocked: true,
+        });
+        this.logger.warn(
+          `Chargeback of ${amount} on org ${org.id} — access blocked`,
+        );
+        break;
+      case 'chargeback_reverse':
+        await this.orgsService.updateSubscription(org.id, {
+          billingBlocked: false,
+        });
+        this.logger.log(
+          `Chargeback reversed (${amount}) on org ${org.id} — access restored`,
+        );
+        break;
+      default:
+        // Refunds, credits, and chargeback warnings: Paddle emails the
+        // customer as merchant of record, and cancels the subscription
+        // separately if that was the deal, so there's nothing to change.
+        this.logger.log(
+          `Adjustment ${adj.action} of ${amount} on org ${org.id}`,
+        );
+    }
+  }
+
+  // Paddle copies a transaction's custom_data onto the subscription it creates,
+  // and a subscription's custom_data onto its later transactions — so orgId is
+  // on every event in the lifecycle. paddleCustomerId is only the fallback:
+  // webhooks aren't delivered in order, so transaction.completed can arrive
+  // before subscription.created has stored the customer id.
+  private async resolveOrg(
+    customData: unknown,
+    customerId?: string | null,
+  ): Promise<Org | null> {
+    const orgId = this.extractOrgId(customData);
+    if (orgId) {
+      const org = await this.orgsService.findOne(orgId);
+      if (org) return org;
+    }
+    if (customerId) {
+      return this.orgsService.findByPaddleCustomerId(customerId);
+    }
+    return null;
+  }
+
+  // Paddle makes no ordering guarantee, so a delayed event must not overwrite
+  // state a newer one already applied.
+  private isStale(org: Org, occurredAt?: Date): boolean {
+    if (!occurredAt || !org.subscriptionEventAt) return false;
+    if (occurredAt >= org.subscriptionEventAt) return false;
+    this.logger.log(
+      `Skipping out-of-order subscription event for org ${org.id}`,
+    );
+    return true;
+  }
+
+  private toDate(iso: string | null | undefined): Date | undefined {
+    if (!iso) return undefined;
+    const ms = Date.parse(iso);
+    return Number.isNaN(ms) ? undefined : new Date(ms);
   }
 
   private extractOrgId(customData: unknown): string | undefined {

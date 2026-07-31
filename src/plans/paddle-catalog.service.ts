@@ -1,10 +1,17 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import * as Sentry from '@sentry/nestjs';
 import { Model } from 'mongoose';
 import { Paddle } from '@paddle/paddle-node-sdk';
-import { PADDLE_CLIENT } from '../paddle/paddle.module';
+import { PADDLE_CLIENT, PADDLE_ENV } from '../paddle/paddle.module';
+import type { PaddleEnv } from './plan-catalog';
 import { PlanLimits } from './interfaces/plan.interface';
-import { PLAN_TIERS, PlanTier } from './plan-catalog';
+import {
+  PLAN_TIERS,
+  PlanTier,
+  PRODUCT_IDS,
+  TierName,
+  tierForProduct,
+} from './plan-catalog';
 import { PADDLE_CATALOG_MODEL } from './plans.providers';
 import {
   CATALOG_DOC_ID,
@@ -67,14 +74,76 @@ const MAX_PRICES = 500;
  * of them, which an in-process cache can't do.
  */
 @Injectable()
-export class PaddleCatalogService {
+export class PaddleCatalogService implements OnModuleInit {
   private readonly logger = new Logger(PaddleCatalogService.name);
 
   constructor(
     @Inject(PADDLE_CLIENT) private readonly paddle: Paddle,
+    @Inject(PADDLE_ENV) private readonly paddleEnv: PaddleEnv,
     @Inject(PADDLE_CATALOG_MODEL)
     private readonly catalogModel: Model<any>,
   ) {}
+
+  onModuleInit(): void {
+    // Deliberately not awaited: a Paddle hiccup must not stop the app booting.
+    void this.verifyProductIds();
+  }
+
+  /**
+   * Check at startup that the product ids configured for this environment
+   * actually exist in the Paddle account we're pointed at.
+   *
+   * This is what turns "deployed to production with sandbox product ids" from
+   * a silent revenue leak — discovered whenever someone first subscribes — into
+   * an alert seconds after boot.
+   */
+  private async verifyProductIds(): Promise<void> {
+    const configured = PRODUCT_IDS[this.paddleEnv];
+    const tiers = Object.keys(configured) as TierName[];
+
+    const unset = tiers.filter((t) => !configured[t]);
+    if (unset.length) {
+      const msg = `No Paddle product id set for ${unset.join(', ')} in ${this.paddleEnv} — those tiers cannot be entitled`;
+      this.logger.error(msg);
+      Sentry.captureMessage(msg, { level: 'error' });
+    }
+
+    const ids = tiers.map((t) => configured[t]).filter(Boolean);
+    if (!ids.length) return;
+
+    try {
+      const found = new Set<string>();
+      for await (const product of this.paddle.products.list({
+        id: ids,
+        status: ['active'],
+      })) {
+        found.add(product.id);
+      }
+
+      const missing = tiers.filter(
+        (t) => configured[t] && !found.has(configured[t]),
+      );
+      if (missing.length) {
+        const msg =
+          `Paddle product ids for ${missing.join(', ')} are not active in the ${this.paddleEnv} account ` +
+          `— check PADDLE_ENVIRONMENT and PRODUCT_IDS in plan-catalog.ts`;
+        this.logger.error(msg);
+        Sentry.captureMessage(msg, {
+          level: 'error',
+          extra: { paddleEnv: this.paddleEnv, configured },
+        });
+        return;
+      }
+
+      this.logger.log(
+        `Paddle product ids verified against the ${this.paddleEnv} account`,
+      );
+    } catch (err) {
+      // Unreachable Paddle is not itself a misconfiguration — say so and move
+      // on rather than crying wolf.
+      this.logger.warn(`Could not verify Paddle product ids: ${err}`);
+    }
+  }
 
   async getCatalog(): Promise<Catalog> {
     const doc = await this.read();
@@ -365,11 +434,7 @@ export class PaddleCatalogService {
   }
 
   private tierFor(price: StoredPrice): PlanTier | null {
-    return (
-      PLAN_TIERS.find((t) => t.productId && t.productId === price.productId) ??
-      PLAN_TIERS.find((t) => t.priceIds.includes(price.id)) ??
-      null
-    );
+    return tierForProduct(this.paddleEnv, price.productId);
   }
 
   private toCatalogPrice(price: StoredPrice): CatalogPrice {

@@ -1,9 +1,14 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import * as Sentry from '@sentry/nestjs';
+import { PADDLE_ENV } from '../paddle/paddle.module';
+import type { PaddleEnv } from './plan-catalog';
 import { PlanLimits } from './interfaces/plan.interface';
-import { FALLBACK_TIER, PLAN_TIERS, PlanRef, PlanTier } from './plan-catalog';
-
-export type { PlanRef };
+import {
+  FALLBACK_TIER,
+  PLAN_TIERS,
+  PlanTier,
+  tierForProduct,
+} from './plan-catalog';
 
 @Injectable()
 export class PlansService {
@@ -12,6 +17,7 @@ export class PlansService {
   constructor(
     @Inject('PLAN_LIMITS_OVERRIDE')
     private readonly limitsOverride: string | undefined,
+    @Inject(PADDLE_ENV) private readonly paddleEnv: PaddleEnv,
   ) {}
 
   findAll(): PlanTier[] {
@@ -19,20 +25,14 @@ export class PlansService {
   }
 
   /**
-   * The tier a subscription entitles, or null if we don't recognise it.
-   * productId wins; priceId is the fallback for tiers whose product id isn't
-   * filled in yet, and for prices that predate a tier's mapping.
+   * The tier a Paddle product entitles, or null if we don't recognise it.
+   *
+   * Keyed on the product rather than the price so that new prices under an
+   * existing product — a price change, a different trial, a promo — are
+   * entitled correctly with no code change.
    */
-  findTier(ref: PlanRef): PlanTier | null {
-    if (ref.productId) {
-      const byProduct = PLAN_TIERS.find((t) => t.productId === ref.productId);
-      if (byProduct) return byProduct;
-    }
-    if (ref.priceId) {
-      const byPrice = PLAN_TIERS.find((t) => t.priceIds.includes(ref.priceId!));
-      if (byPrice) return byPrice;
-    }
-    return null;
+  findTier(productId: string | undefined | null): PlanTier | null {
+    return tierForProduct(this.paddleEnv, productId);
   }
 
   /**
@@ -43,26 +43,25 @@ export class PlansService {
    * Reaching the fallback means someone can buy something this code doesn't
    * know how to entitle, which is why it goes to Sentry rather than just a log.
    */
-  getLimits(ref: PlanRef): PlanLimits {
+  getLimits(productId: string | undefined | null): PlanLimits {
     const override = this.parseOverride();
     if (override) return override;
 
-    const tier = this.findTier(ref);
+    const tier = this.findTier(productId);
     if (tier) return tier.limits;
 
-    const detail = `product=${ref.productId ?? 'none'} price=${ref.priceId ?? 'none'}`;
     this.logger.error(
-      `No plan tier for ${detail} — falling back to ${FALLBACK_TIER.name} limits`,
+      `No plan tier for product ${productId ?? 'none'} in ${this.paddleEnv} — falling back to ${FALLBACK_TIER.name} limits`,
     );
-    Sentry.captureMessage(`Unmapped Paddle product on subscription: ${detail}`, {
-      level: 'error',
-      extra: { ...ref },
-    });
+    Sentry.captureMessage(
+      `Unmapped Paddle product on subscription: ${productId ?? 'none'}`,
+      { level: 'error', extra: { productId, paddleEnv: this.paddleEnv } },
+    );
     return FALLBACK_TIER.limits;
   }
 
-  planName(ref: PlanRef): string {
-    return this.findTier(ref)?.name ?? 'Unknown';
+  planName(productId: string | undefined | null): string {
+    return this.findTier(productId)?.name ?? 'Unknown';
   }
 
   // Local testing hatch: "maxPages,maxLayouts,maxSnippets".

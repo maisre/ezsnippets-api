@@ -715,10 +715,7 @@ export class PagesService {
       );
     }
 
-    const limits = this.plansService.getLimits({
-      productId: org.productId,
-      priceId: org.plan,
-    });
+    const limits = this.plansService.getLimits(org.productId);
     if (limits.maxPages === -1) return; // Unlimited
 
     const current = await this.countForOrg(orgId);

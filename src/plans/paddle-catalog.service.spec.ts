@@ -1,5 +1,5 @@
 import { PaddleCatalogService } from './paddle-catalog.service';
-import { PLAN_TIERS } from './plan-catalog';
+import { PRODUCT_IDS } from './plan-catalog';
 import { CATALOG_DOC_ID, StoredPrice } from './schemas/paddle-catalog.schema';
 
 jest.mock('@sentry/nestjs', () => ({
@@ -7,15 +7,17 @@ jest.mock('@sentry/nestjs', () => ({
   captureException: jest.fn(),
 }));
 
-const BASIC_MONTHLY = PLAN_TIERS[0].priceIds[0];
-const PRO_MONTHLY = PLAN_TIERS[1].priceIds[0];
-const PRO_YEARLY = PLAN_TIERS[1].priceIds[1];
+const BASIC_PRODUCT = PRODUCT_IDS.sandbox.Basic;
+const PRO_PRODUCT = PRODUCT_IDS.sandbox.Pro;
+const PRO_MONTHLY = 'pri_pro_monthly';
+const PRO_YEARLY = 'pri_pro_yearly';
+const BASIC_MONTHLY = 'pri_basic_monthly';
 
 /** A Paddle price as the SDK hands it to us (before flattening). */
 function sdkPrice(overrides: Partial<any> = {}): any {
   return {
     id: PRO_MONTHLY,
-    productId: 'prd_pro',
+    productId: PRO_PRODUCT,
     status: 'active',
     createdAt: '2026-01-01T00:00:00Z',
     billingCycle: { interval: 'month', frequency: 1 },
@@ -81,9 +83,10 @@ function fakeModel(initial: any = null) {
   };
 }
 
-function build(prices: any[] | Error, initialDoc: any = null) {
+function build(prices: any[] | Error, initialDoc: any = null, products: any[] = []) {
   const model = fakeModel(initialDoc);
   const paddle = {
+    products: { list: jest.fn(() => collectionOf(products)) },
     prices: {
       list: jest.fn(() => {
         if (prices instanceof Error) throw prices;
@@ -91,30 +94,29 @@ function build(prices: any[] | Error, initialDoc: any = null) {
       }),
     },
   };
-  const service = new PaddleCatalogService(paddle as any, model as any);
+  const service = new PaddleCatalogService(paddle as any, 'sandbox', model as any);
+  return { service, model, paddle };
+}
+
+/** Same, but pointed at an arbitrary environment for the startup check. */
+function buildForEnv(env: any, products: any[] = []) {
+  const model = fakeModel(null);
+  const paddle = {
+    products: { list: jest.fn(() => collectionOf(products)) },
+    prices: { list: jest.fn(() => collectionOf([])) },
+  };
+  const service = new PaddleCatalogService(paddle as any, env, model as any);
   return { service, model, paddle };
 }
 
 describe('PaddleCatalogService', () => {
-  // Exercise the product-keyed path these tests are really about. Without
-  // product ids set, a price resolves only by being in the hardcoded priceIds
-  // list — which is why filling them in matters.
-  beforeEach(() => {
-    jest.clearAllMocks();
-    PLAN_TIERS[0].productId = 'prd_basic';
-    PLAN_TIERS[1].productId = 'prd_pro';
-  });
-
-  afterEach(() => {
-    delete PLAN_TIERS[0].productId;
-    delete PLAN_TIERS[1].productId;
-  });
+  beforeEach(() => jest.clearAllMocks());
 
   describe('building plans', () => {
     it('includes only prices flagged for display in Paddle', async () => {
       const { service } = build([
         sdkPrice({ id: PRO_MONTHLY }),
-        sdkPrice({ id: BASIC_MONTHLY, productId: 'prd_basic', customData: null }),
+        sdkPrice({ id: BASIC_MONTHLY, productId: BASIC_PRODUCT, customData: null }),
       ]);
 
       const catalog = await service.getCatalog();
@@ -187,7 +189,7 @@ describe('PaddleCatalogService', () => {
     it('orders plans least to most generous, not however Paddle returned them', async () => {
       const { service } = build([
         sdkPrice({ id: PRO_MONTHLY }),
-        sdkPrice({ id: BASIC_MONTHLY, productId: 'prd_basic' }),
+        sdkPrice({ id: BASIC_MONTHLY, productId: BASIC_PRODUCT }),
       ]);
 
       expect((await service.getCatalog()).plans.map((p) => p.name)).toEqual([
@@ -304,5 +306,59 @@ describe('PaddleCatalogService', () => {
       await service.invalidate();
       expect(paddle.prices.list).toHaveBeenCalled();
     });
+  });
+});
+
+describe('product id startup check', () => {
+  const Sentry = require('@sentry/nestjs');
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+
+  beforeEach(() => jest.clearAllMocks());
+
+  it('passes silently when every configured product is active', async () => {
+    const { service } = buildForEnv('sandbox', [
+      { id: PRODUCT_IDS.sandbox.Basic },
+      { id: PRODUCT_IDS.sandbox.Pro },
+      { id: PRODUCT_IDS.sandbox.Enterprise },
+    ]);
+
+    service.onModuleInit();
+    await settle();
+    expect(Sentry.captureMessage).not.toHaveBeenCalled();
+  });
+
+  it('alerts when a configured product is not active in the account', async () => {
+    // The "deployed to production with sandbox ids" shape: ids are set, but
+    // the account we are pointed at has never heard of them.
+    const { service } = buildForEnv('sandbox', []);
+
+    service.onModuleInit();
+    await settle();
+    expect(Sentry.captureMessage).toHaveBeenCalledWith(
+      expect.stringContaining('not active in the sandbox account'),
+      expect.objectContaining({ level: 'error' }),
+    );
+  });
+
+  it('alerts when a tier has no product id configured at all', async () => {
+    const { service } = buildForEnv('production');
+
+    service.onModuleInit();
+    await settle();
+    expect(Sentry.captureMessage).toHaveBeenCalledWith(
+      expect.stringContaining('No Paddle product id set'),
+      expect.objectContaining({ level: 'error' }),
+    );
+  });
+
+  it('does not cry wolf when Paddle itself is unreachable', async () => {
+    const { service, paddle } = buildForEnv('sandbox');
+    paddle.products.list.mockImplementation(() => {
+      throw new Error('paddle down');
+    });
+
+    service.onModuleInit();
+    await settle();
+    expect(Sentry.captureMessage).not.toHaveBeenCalled();
   });
 });

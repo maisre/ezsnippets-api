@@ -730,10 +730,7 @@ export class LayoutsService {
       );
     }
 
-    const limits = this.plansService.getLimits({
-      productId: org.productId,
-      priceId: org.plan,
-    });
+    const limits = this.plansService.getLimits(org.productId);
     if (limits.maxLayouts === -1) return; // Unlimited
 
     const current = await this.countForOrg(orgId);

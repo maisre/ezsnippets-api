@@ -46,7 +46,6 @@ export class PlansController {
       };
     }
 
-    const ref = { productId: org.productId, priceId: org.plan };
     const [pageCount, layoutCount] = await Promise.all([
       this.pagesService.countForOrg(orgId),
       this.layoutsService.countForOrg(orgId),
@@ -54,8 +53,8 @@ export class PlansController {
 
     return {
       hasPlan: true,
-      plan: this.plansService.planName(ref),
-      limits: this.plansService.getLimits(ref),
+      plan: this.plansService.planName(org.productId),
+      limits: this.plansService.getLimits(org.productId),
       usage: {
         pages: pageCount,
         layouts: layoutCount,

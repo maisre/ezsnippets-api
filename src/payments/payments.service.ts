@@ -165,7 +165,7 @@ export class PaymentsService {
       type: 'subscription_canceled',
       orgId,
       orgName: org.name,
-      plan: this.plansService.planName({ productId: org.productId, priceId: org.plan }),
+      plan: this.plansService.planName(org.productId),
     });
 
     this.logger.log(`Subscription cancellation scheduled for org ${orgId}`);
@@ -314,7 +314,7 @@ export class PaymentsService {
       type: 'subscription_confirmed',
       orgId,
       orgName: org.name,
-      plan: this.plansService.planName(ref),
+      plan: this.plansService.planName(ref.productId),
     });
 
     this.logger.log(`Subscription activated for org ${orgId}`);
@@ -363,7 +363,7 @@ export class PaymentsService {
       type: 'subscription_expired',
       orgId: org.id,
       orgName: org.name,
-      plan: this.plansService.planName(ref),
+      plan: this.plansService.planName(ref.productId),
     });
 
     this.logger.log(`Subscription deleted for org ${org.id}`);
@@ -413,7 +413,7 @@ export class PaymentsService {
         type: 'payment_succeeded',
         orgId: org.id,
         orgName: org.name,
-        plan: this.plansService.planName({ productId: org.productId, priceId: org.plan }),
+        plan: this.plansService.planName(org.productId),
         amountPaid: this.formatMinorUnits(total?.grandTotal),
         currency: total?.currencyCode?.toLowerCase() ?? '',
       });
@@ -434,7 +434,7 @@ export class PaymentsService {
       type: 'payment_failed',
       orgId: org.id,
       orgName: org.name,
-      plan: this.plansService.planName({ productId: org.productId, priceId: org.plan }),
+      plan: this.plansService.planName(org.productId),
       amountDue: this.formatMinorUnits(total?.grandTotal),
       currency: total?.currencyCode?.toLowerCase() ?? '',
     });
@@ -529,7 +529,7 @@ export class PaymentsService {
    * and getLimits can report the unmapped product.
    */
   private planRefFor(sub: SubscriptionNotification): PlanRef {
-    return pickPlanRef(sub.items, (ref) => !!this.plansService.findTier(ref));
+    return pickPlanRef(sub.items, (ref) => !!this.plansService.findTier(ref.productId));
   }
 
   // Paddle copies a transaction's custom_data onto the subscription it creates,

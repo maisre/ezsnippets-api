@@ -48,6 +48,10 @@ lerna-debug.log*
 .env.*
 !.env.example
 
+# Local one-off maintenance scripts (DB seeding, bulk content generation).
+# Deliberately untracked — they run against a developer's own database.
+/scripts
+
 # temp directory
 .temp
 .tmp

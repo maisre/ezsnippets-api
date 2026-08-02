@@ -52,6 +52,11 @@ lerna-debug.log*
 # Deliberately untracked — they run against a developer's own database.
 /scripts
 
+# Working notes for the snippet-library review. Untracked for now: this work
+# is likely to move to its own repo, since authoring and repairing snippets
+# isn't the api's job.
+/docs/snippet-review-guide.md
+
 # temp directory
 .temp
 .tmp

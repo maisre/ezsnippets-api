@@ -3,6 +3,7 @@ import type { Response } from 'express';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { fill } from '../common/fill-template';
+import { applyScope } from '../common/apply-scope';
 import { SnippetsService } from './snippets.service';
 import { Snippet } from './interfaces/snippet.interface';
 
@@ -45,9 +46,16 @@ export class SnippetsController {
       'utf8',
     );
 
-    let html = fill(htmlTemplate, '{{ SNIPPET_HTML }}', String(snippet.html || ''));
-    html = fill(html, '{{ SNIPPET_CSS }}', String(snippet.css || ''));
-    html = fill(html, '{{ SNIPPET_JS }}', String(snippet.js || ''));
+    // A lone snippet still needs its scope tokens resolved. Without this the
+    // preview shipped `{{SNIPPET_SCOPE}}` literally, so every scoped CSS rule
+    // matched nothing, and `{{SNIPPET_SCOPE_JS}}` is not even valid JS.
+    let html = fill(
+      htmlTemplate,
+      '{{ SNIPPET_HTML }}',
+      applyScope(snippet.html, 0),
+    );
+    html = fill(html, '{{ SNIPPET_CSS }}', applyScope(snippet.css, 0));
+    html = fill(html, '{{ SNIPPET_JS }}', applyScope(snippet.js, 0));
 
     res.setHeader('Content-Type', 'text/html');
     res.send(html);

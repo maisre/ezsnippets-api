@@ -17,6 +17,7 @@ import type { Response } from 'express';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { fill } from '../common/fill-template';
+import { applyScope } from '../common/apply-scope';
 import { PagesService } from './pages.service';
 import { Page } from './interfaces/page.interface';
 import { CreatePageDto } from './dto/create-page.dto';
@@ -178,14 +179,16 @@ export class PagesController {
     const snippets = await Promise.all(snippetPromises);
     const validSnippets = snippets.filter((snippet) => snippet !== null);
 
+    // Each snippet gets its own scope index, as in ez-view — otherwise every
+    // snippet's scoped CSS resolves to the same class and they cross-contaminate.
     const concatenatedHtml = validSnippets
-      .map((snippet) => snippet.html || '')
+      .map((snippet, i) => applyScope(snippet.html, i))
       .join('\n');
     const concatenatedCss = validSnippets
-      .map((snippet) => snippet.css || '')
+      .map((snippet, i) => applyScope(snippet.css, i))
       .join('\n');
     const concatenatedJs = validSnippets
-      .map((snippet) => snippet.js || '')
+      .map((snippet, i) => applyScope(snippet.js, i))
       .join('\n');
 
     const htmlTemplate = readFileSync(

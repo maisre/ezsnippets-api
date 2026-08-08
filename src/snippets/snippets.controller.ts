@@ -2,6 +2,7 @@ import { Controller, Get, Param, Query, Res, NotFoundException } from '@nestjs/c
 import type { Response } from 'express';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { fill } from '../common/fill-template';
 import { SnippetsService } from './snippets.service';
 import { Snippet } from './interfaces/snippet.interface';
 
@@ -44,10 +45,9 @@ export class SnippetsController {
       'utf8',
     );
 
-    const html = htmlTemplate
-      .replace('{{ SNIPPET_HTML }}', String(snippet.html || ''))
-      .replace('{{ SNIPPET_CSS }}', String(snippet.css || ''))
-      .replace('{{ SNIPPET_JS }}', String(snippet.js || ''));
+    let html = fill(htmlTemplate, '{{ SNIPPET_HTML }}', String(snippet.html || ''));
+    html = fill(html, '{{ SNIPPET_CSS }}', String(snippet.css || ''));
+    html = fill(html, '{{ SNIPPET_JS }}', String(snippet.js || ''));
 
     res.setHeader('Content-Type', 'text/html');
     res.send(html);

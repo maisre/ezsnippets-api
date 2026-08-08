@@ -16,6 +16,7 @@ import {
 import type { Response } from 'express';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { fill } from '../common/fill-template';
 import { PagesService } from './pages.service';
 import { Page } from './interfaces/page.interface';
 import { CreatePageDto } from './dto/create-page.dto';
@@ -192,10 +193,9 @@ export class PagesController {
       'utf8',
     );
 
-    const html = htmlTemplate
-      .replace('{{ SNIPPET_HTML }}', concatenatedHtml)
-      .replace('{{ SNIPPET_CSS }}', concatenatedCss)
-      .replace('{{ SNIPPET_JS }}', concatenatedJs);
+    let html = fill(htmlTemplate, '{{ SNIPPET_HTML }}', concatenatedHtml);
+    html = fill(html, '{{ SNIPPET_CSS }}', concatenatedCss);
+    html = fill(html, '{{ SNIPPET_JS }}', concatenatedJs);
 
     res.setHeader('Content-Type', 'text/html');
     res.send(html);

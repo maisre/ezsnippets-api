@@ -56,6 +56,11 @@ lerna-debug.log*
 # is likely to move to its own repo, since authoring and repairing snippets
 # isn't the api's job.
 /docs/snippet-review-guide.md
+# Audit output for the snippet review: a full-library browser audit plus the
+# clustered offender list. Regenerable with scripts/audit-page.js, machine-
+# specific, and large — kept next to the guide it belongs to rather than in
+# /private/tmp, which gets cleared between sessions.
+/docs/review-state/
 
 # temp directory
 .temp

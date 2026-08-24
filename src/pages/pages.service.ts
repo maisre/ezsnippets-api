@@ -12,6 +12,7 @@ import { CreatePageDto } from './dto/create-page.dto';
 import { UpdatePageDto } from './dto/update-page.dto';
 import { RedisPubSubService } from '../redis';
 import { OpenaiService } from '../openai';
+import { AiUsageService } from '../ai-usage';
 import { SnippetsService } from '../snippets/snippets.service';
 import { OrgsService } from '../orgs/orgs.service';
 import { PlansService } from '../plans/plans.service';
@@ -32,6 +33,7 @@ export class PagesService {
     private readonly orgsService: OrgsService,
     private readonly plansService: PlansService,
     private readonly shutterstockService: ShutterstockService,
+    private readonly aiUsageService: AiUsageService,
   ) {}
 
   async findAll(): Promise<Page[]> {
@@ -319,6 +321,10 @@ export class PagesService {
       return updatedPage;
     }
 
+    // Meter before we spend: everything above this point is local work, and the
+    // early return above means an org isn't charged for a no-op customize.
+    await this.aiUsageService.consume(String(orgId), 'page.customize');
+
     const result = await this.openaiService.customizeContent({
       name: page.name,
       siteName: page.siteName,
@@ -455,6 +461,11 @@ export class PagesService {
     // (e.g. onlyMissing where the new snippets carry no image slots). Targeted
     // snippets are still marked done below so the "missing" count clears.
     if (slots.length) {
+      await this.aiUsageService.consume(
+        String(orgId),
+        'page.customize-images',
+      );
+
       const { slots: queries } = await this.openaiService.deriveImageQueries({
         name: page.name,
         siteName: page.siteName,

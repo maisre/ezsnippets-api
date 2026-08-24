@@ -8,9 +8,10 @@ import { OpenaiModule } from '../openai';
 import { OrgsModule } from '../orgs/orgs.module';
 import { PlansModule } from '../plans/plans.module';
 import { ShutterstockModule } from '../shutterstock';
+import { AiUsageModule } from '../ai-usage';
 
 @Module({
-  imports: [DatabaseModule, SnippetsModule, OpenaiModule.forRootAsync(), OrgsModule, forwardRef(() => PlansModule), ShutterstockModule],
+  imports: [DatabaseModule, SnippetsModule, OpenaiModule.forRootAsync(), OrgsModule, forwardRef(() => PlansModule), ShutterstockModule, AiUsageModule],
   controllers: [PagesController],
   providers: [PagesService, ...pageProviders],
   exports: [PagesService],

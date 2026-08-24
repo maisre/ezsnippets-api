@@ -11,6 +11,7 @@ import { Layout } from './interfaces/layout.interface';
 import { CreateLayoutDto } from './dto/create-layout.dto';
 import { UpdateLayoutDto } from './dto/update-layout.dto';
 import { OpenaiService } from '../openai';
+import { AiUsageService } from '../ai-usage';
 import { SnippetsService } from '../snippets/snippets.service';
 import { OrgsService } from '../orgs/orgs.service';
 import { PlansService } from '../plans/plans.service';
@@ -30,6 +31,7 @@ export class LayoutsService {
     private readonly orgsService: OrgsService,
     private readonly plansService: PlansService,
     private readonly shutterstockService: ShutterstockService,
+    private readonly aiUsageService: AiUsageService,
   ) {}
 
   async findAll(): Promise<Layout[]> {
@@ -343,6 +345,10 @@ export class LayoutsService {
       return updatedLayout;
     }
 
+    // Meter before we spend: everything above this point is local work, and the
+    // early return above means an org isn't charged for a no-op customize.
+    await this.aiUsageService.consume(String(orgId), 'layout.customize');
+
     const result = await this.openaiService.customizeContent({
       name: layout.name,
       siteName: layout.siteName,
@@ -481,6 +487,11 @@ export class LayoutsService {
     // (e.g. onlyMissing where the new snippets carry no image slots). Targeted
     // snippets are still marked done below so the "missing" count clears.
     if (slots.length) {
+      await this.aiUsageService.consume(
+        String(orgId),
+        'layout.customize-images',
+      );
+
       const { slots: queries } = await this.openaiService.deriveImageQueries({
         name: layout.name,
         siteName: layout.siteName,

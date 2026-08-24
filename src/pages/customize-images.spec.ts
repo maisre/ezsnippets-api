@@ -38,6 +38,9 @@ function buildService(opts: {
     findOne: async (id: string) => opts.snippets.find((s) => String(s._id) === id),
   };
   const shutterstock: any = { findBestMatch: opts.findBestMatch };
+  // Metering is exercised in the ai-usage tests; here it just needs to allow the
+  // call through so the image flow under test can run.
+  const aiUsage: any = { consume: jest.fn().mockResolvedValue(undefined) };
 
   const service = new PagesService(
     pageModel,
@@ -47,9 +50,10 @@ function buildService(opts: {
     {} as any,
     {} as any,
     shutterstock,
+    aiUsage,
   );
 
-  return { service, saved, openai, shutterstock };
+  return { service, saved, openai, shutterstock, aiUsage };
 }
 
 const SNIPPET = {

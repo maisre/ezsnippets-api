@@ -50,7 +50,13 @@ lerna-debug.log*
 
 # Local one-off maintenance scripts (DB seeding, bulk content generation).
 # Deliberately untracked — they run against a developer's own database.
-/scripts
+/scripts/*
+
+# ...except the snippet preview pipeline. These two are not one-off: they are
+# re-run after every bulk snippet edit, they publish to a shared production
+# bucket, and ez-infra's go-live checklist documents them by path.
+!/scripts/capture-snippets.js
+!/scripts/upload-snippet-shots.js
 
 # Working notes for the snippet-library review. Untracked for now: this work
 # is likely to move to its own repo, since authoring and repairing snippets
@@ -74,3 +80,8 @@ pids
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
+
+# Snippet preview captures (scripts/capture-snippets.js). Published to the
+# assets bucket by scripts/upload-snippet-shots.js; S3 is the source of truth,
+# not git.
+/snippet-shots/

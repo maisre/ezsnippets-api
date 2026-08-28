@@ -14,25 +14,17 @@ import {
   Body,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { readFileSync } from 'fs';
-import { join } from 'path';
-import { fill } from '../common/fill-template';
-import { applyScope } from '../common/apply-scope';
 import { PagesService } from './pages.service';
 import { Page } from './interfaces/page.interface';
 import { CreatePageDto } from './dto/create-page.dto';
 import { UpdatePageDto } from './dto/update-page.dto';
 import { CustomizeImagesDto } from './dto/customize-images.dto';
 import { CustomizeDto } from './dto/customize.dto';
-import { SnippetsService } from '../snippets/snippets.service';
 import { JwtAuthGuard } from '../auth/jwt.strategy';
 
 @Controller('pages')
 export class PagesController {
-  constructor(
-    private readonly pagesService: PagesService,
-    private readonly snippetsService: SnippetsService,
-  ) {}
+  constructor(private readonly pagesService: PagesService) {}
 
   @UseGuards(JwtAuthGuard)
   @Get()
@@ -157,50 +149,5 @@ export class PagesController {
   @HttpCode(204)
   async remove(@Param('id') id: string, @Request() req): Promise<void> {
     return this.pagesService.remove(id, req.user.activeOrg);
-  }
-
-  @UseGuards(JwtAuthGuard)
-  @Get('view/:id')
-  async viewPage(
-    @Param('id') id: string,
-    @Request() req,
-    @Res() res: Response,
-  ) {
-    const page = await this.pagesService.findOne(id, req.user.activeOrg);
-
-    if (!page) {
-      throw new NotFoundException(`Page with id ${id} not found`);
-    }
-
-    const snippetPromises = page.snippets.map((snippetAbstract) =>
-      this.snippetsService.findOne(String(snippetAbstract.id)),
-    );
-
-    const snippets = await Promise.all(snippetPromises);
-    const validSnippets = snippets.filter((snippet) => snippet !== null);
-
-    // Each snippet gets its own scope index, as in ez-view — otherwise every
-    // snippet's scoped CSS resolves to the same class and they cross-contaminate.
-    const concatenatedHtml = validSnippets
-      .map((snippet, i) => applyScope(snippet.html, i))
-      .join('\n');
-    const concatenatedCss = validSnippets
-      .map((snippet, i) => applyScope(snippet.css, i))
-      .join('\n');
-    const concatenatedJs = validSnippets
-      .map((snippet, i) => applyScope(snippet.js, i))
-      .join('\n');
-
-    const htmlTemplate = readFileSync(
-      join(__dirname, '..', 'templates', 'html-template.txt'),
-      'utf8',
-    );
-
-    let html = fill(htmlTemplate, '{{ SNIPPET_HTML }}', concatenatedHtml);
-    html = fill(html, '{{ SNIPPET_CSS }}', concatenatedCss);
-    html = fill(html, '{{ SNIPPET_JS }}', concatenatedJs);
-
-    res.setHeader('Content-Type', 'text/html');
-    res.send(html);
   }
 }

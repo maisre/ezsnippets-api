@@ -116,9 +116,8 @@ export const FALLBACK_TIER = PLAN_TIERS[0];
  * on FALLBACK_TIER with a Sentry alert, and the startup check in
  * PaddleCatalogService reports it explicitly.
  *
- * NOTE: the sandbox products were created under the old tier names (Basic /
- * Enterprise). The ids below are unchanged and still resolve correctly — only
- * the display names in the Paddle dashboard are now stale.
+ * The sandbox products were renamed to match (Starter / Pro / Agency) when the
+ * tiers were restructured; the ids are unchanged from when they were created.
  */
 export const PRODUCT_IDS: Record<PaddleEnv, Record<TierName, string>> = {
   sandbox: {

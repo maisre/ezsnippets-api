@@ -64,15 +64,24 @@ export class PlansService {
     return this.findTier(productId)?.name ?? 'Unknown';
   }
 
-  // Local testing hatch: "maxPages,maxLayouts,maxSnippets".
+  /**
+   * Local testing hatch:
+   * "maxPages,maxLayouts,maxSeats,maxCustomDomains,aiDailyLimit".
+   *
+   * All five are required — a partial override would silently grant whatever
+   * the missing fields defaulted to, which is the failure this whole module
+   * exists to prevent.
+   */
   private parseOverride(): PlanLimits | null {
     if (!this.limitsOverride) return null;
     const parts = this.limitsOverride.split(',').map(Number);
-    if (parts.length !== 3 || parts.some((n) => isNaN(n))) return null;
+    if (parts.length !== 5 || parts.some((n) => isNaN(n))) return null;
     return {
       maxPages: parts[0],
       maxLayouts: parts[1],
-      maxSnippets: parts[2],
+      maxSeats: parts[2],
+      maxCustomDomains: parts[3],
+      aiDailyLimit: parts[4],
     };
   }
 }

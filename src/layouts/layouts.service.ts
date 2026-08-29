@@ -347,7 +347,11 @@ export class LayoutsService {
 
     // Meter before we spend: everything above this point is local work, and the
     // early return above means an org isn't charged for a no-op customize.
-    await this.aiUsageService.consume(String(orgId), 'layout.customize');
+    await this.aiUsageService.consume(
+      String(orgId),
+      'layout.customize',
+      await this.aiLimitFor(String(orgId)),
+    );
 
     const result = await this.openaiService.customizeContent({
       name: layout.name,
@@ -490,6 +494,7 @@ export class LayoutsService {
       await this.aiUsageService.consume(
         String(orgId),
         'layout.customize-images',
+        await this.aiLimitFor(String(orgId)),
       );
 
       const { slots: queries } = await this.openaiService.deriveImageQueries({
@@ -731,6 +736,20 @@ export class LayoutsService {
     if (!deletedLayout) {
       throw new NotFoundException(`Layout with id ${id} not found`);
     }
+  }
+
+  /**
+   * The org's AI allowance for the day, from its plan.
+   *
+   * Resolved per call rather than cached so a plan change takes effect at once;
+   * it's one indexed read alongside an OpenAI round-trip. Returns undefined
+   * when the org can't be loaded, which leaves AiUsageService on its backstop
+   * ceiling rather than unmetered.
+   */
+  private async aiLimitFor(orgId: string): Promise<number | undefined> {
+    const org = await this.orgsService.findOne(orgId);
+    if (!org) return undefined;
+    return this.plansService.getLimits(org.productId).aiDailyLimit;
   }
 
   private async enforceLimit(orgId: string): Promise<void> {

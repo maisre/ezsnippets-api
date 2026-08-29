@@ -40,25 +40,37 @@ export function utcDay(now: Date = new Date()): string {
  * OpenAI invoice. The Terms of Service give us grounds to act on that; this
  * gives us the means.
  *
- * The limit is intentionally set far above expected use. It's a backstop against
- * runaway cost, not a product limit — the `ops` breakdown in the collection is
- * there so we can replace this guess with a real number, per plan, once we can
- * see what people actually do.
+ * The ceiling is now per-plan: callers pass the org's `aiDailyLimit` from
+ * PlanLimits. AI_DAILY_LIMIT, when set, overrides every tier — it's the local
+ * testing hatch and the emergency global clamp, not the normal path. When
+ * neither is available the DEFAULT_AI_DAILY_LIMIT backstop applies, which is
+ * deliberately far above expected use: an unresolved plan should not stop a
+ * paying customer working, it should just stop a runaway loop.
  */
 @Injectable()
 export class AiUsageService {
   private readonly logger = new Logger(AiUsageService.name);
-  private readonly dailyLimit: number;
+  private readonly configuredLimit: number | null;
 
   constructor(
     @Inject(AI_USAGE_MODEL) private readonly aiUsageModel: Model<AiUsageDoc>,
     configService: ConfigService,
   ) {
     const configured = Number(configService.get('AI_DAILY_LIMIT'));
-    this.dailyLimit =
-      Number.isFinite(configured) && configured > 0
-        ? configured
-        : DEFAULT_AI_DAILY_LIMIT;
+    this.configuredLimit =
+      Number.isFinite(configured) && configured > 0 ? configured : null;
+  }
+
+  /**
+   * The ceiling actually applied to a request: the global override if one is
+   * configured, else the tier's allowance, else the backstop.
+   */
+  limitFor(tierLimit?: number): number {
+    if (this.configuredLimit !== null) return this.configuredLimit;
+    if (tierLimit !== undefined && Number.isFinite(tierLimit) && tierLimit > 0) {
+      return tierLimit;
+    }
+    return DEFAULT_AI_DAILY_LIMIT;
   }
 
   /**
@@ -70,9 +82,16 @@ export class AiUsageService {
    * of that ordering is that refused attempts still increment `count`, which is
    * why `blocked` is tracked alongside it.
    *
+   * @param tierLimit the org's `aiDailyLimit` from its plan. Optional so that
+   *   a caller that can't resolve a plan still gets the backstop rather than
+   *   no metering at all.
    * @throws HttpException 429 when the org is over its daily ceiling.
    */
-  async consume(org: string, operation: AiOperation): Promise<void> {
+  async consume(
+    org: string,
+    operation: AiOperation,
+    tierLimit?: number,
+  ): Promise<void> {
     if (!org) {
       // No org means no way to attribute the cost. Callers are all
       // authenticated, so this is a programming error rather than a user one.
@@ -81,14 +100,15 @@ export class AiUsageService {
     }
 
     const day = utcDay();
+    const limit = this.limitFor(tierLimit);
     const doc = await this.increment(org, day, operation);
 
-    if (doc.count > this.dailyLimit) {
+    if (doc.count > limit) {
       await this.aiUsageModel
         .updateOne({ org, day }, { $inc: { blocked: 1 } })
         .exec();
       this.logger.warn(
-        `Org ${org} over AI daily limit (${doc.count}/${this.dailyLimit}) on ${operation}`,
+        `Org ${org} over AI daily limit (${doc.count}/${limit}) on ${operation}`,
       );
       throw new HttpException(
         {
@@ -105,11 +125,6 @@ export class AiUsageService {
   /** Today's usage for an org, or null if it hasn't used AI today. */
   async getUsage(org: string, day: string = utcDay()): Promise<AiUsageDoc | null> {
     return this.aiUsageModel.findOne({ org, day }).lean<AiUsageDoc>().exec();
-  }
-
-  /** The ceiling in force, so callers can report it without re-reading config. */
-  get limit(): number {
-    return this.dailyLimit;
   }
 
   /**

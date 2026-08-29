@@ -10,7 +10,7 @@ import { PlansService } from './plans.service';
 jest.mock('@sentry/nestjs', () => ({ captureMessage: jest.fn() }));
 
 const SANDBOX_PRO = PRODUCT_IDS.sandbox.Pro;
-const SANDBOX_BASIC = PRODUCT_IDS.sandbox.Basic;
+const SANDBOX_STARTER = PRODUCT_IDS.sandbox.Starter;
 
 describe('PlansService', () => {
   let service: PlansService;
@@ -23,7 +23,7 @@ describe('PlansService', () => {
   describe('findTier', () => {
     it('resolves a product to its tier', () => {
       expect(service.findTier(SANDBOX_PRO)?.name).toBe('Pro');
-      expect(service.findTier(SANDBOX_BASIC)?.name).toBe('Basic');
+      expect(service.findTier(SANDBOX_STARTER)?.name).toBe('Starter');
     });
 
     it('returns null for an unknown or missing product', () => {
@@ -36,7 +36,7 @@ describe('PlansService', () => {
     // product needs no code change at all, so there's nothing here to test
     // about prices — which is why priceIds no longer exist.
     it('is unaffected by which price was bought', () => {
-      expect(service.findTier(SANDBOX_PRO)?.limits.maxPages).toBe(25);
+      expect(service.findTier(SANDBOX_PRO)?.limits.maxPages).toBe(150);
     });
   });
 
@@ -58,7 +58,7 @@ describe('PlansService', () => {
 
   describe('getLimits', () => {
     it('returns the tier limits for a known product', () => {
-      expect(service.getLimits(SANDBOX_PRO).maxPages).toBe(25);
+      expect(service.getLimits(SANDBOX_PRO).maxPages).toBe(150);
     });
 
     it('falls back to the least generous tier for an unmapped product', () => {
@@ -74,11 +74,13 @@ describe('PlansService', () => {
     });
 
     it('honours PLAN_LIMITS_OVERRIDE', () => {
-      const overridden = new PlansService('2,1,10', 'sandbox');
+      const overridden = new PlansService('2,1,3,4,10', 'sandbox');
       expect(overridden.getLimits(SANDBOX_PRO)).toEqual({
         maxPages: 2,
         maxLayouts: 1,
-        maxSnippets: 10,
+        maxSeats: 3,
+        maxCustomDomains: 4,
+        aiDailyLimit: 10,
       });
     });
   });

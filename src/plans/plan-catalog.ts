@@ -3,7 +3,7 @@ import { PlanLimits } from './interfaces/plan.interface';
 /** Which Paddle account the app is pointed at. */
 export type PaddleEnv = 'sandbox' | 'production';
 
-export type TierName = 'Basic' | 'Pro' | 'Enterprise';
+export type TierName = 'Starter' | 'Pro' | 'Agency';
 
 export interface PlanTier {
   name: TierName;
@@ -25,42 +25,75 @@ export interface PlanTier {
  * Ordered least to most generous. Order is load-bearing: the first entry is the
  * tier a subscription falls back to when it names a product we don't recognise
  * — see PlansService.getLimits.
+ *
+ * The shape of the ladder: Starter fits one client site comfortably, so a solo
+ * dev working sequentially never hits a wall; the layout limit bites as soon as
+ * several projects are live at once, which is the upgrade trigger. Pro adds the
+ * custom preview domain — the "don't show my client your brand" purchase, priced
+ * at the step most customers actually take rather than reserved for the top
+ * tier. Agency sells seats.
+ *
+ * `features` deliberately lists only what is built and shipped. Copy for
+ * templates, saved themes, shared team libraries, and the static-site export
+ * belongs here once those exist — selling them earlier is how the previous
+ * Enterprise tier ended up advertising custom snippet uploads that had no API.
  */
 export const PLAN_TIERS: PlanTier[] = [
   {
-    name: 'Basic',
-    limits: { maxPages: 3, maxLayouts: 1, maxSnippets: 50 },
-    description: 'Perfect for trying things out.',
-    features: ['Community snippets', 'Basic AI customization'],
+    name: 'Starter',
+    limits: {
+      maxPages: 25,
+      maxLayouts: 2,
+      maxSeats: 1,
+      maxCustomDomains: 0,
+      aiDailyLimit: 50,
+    },
+    description: 'For one client site at a time.',
+    features: [
+      'Full snippet library',
+      'AI customization',
+      'Unlimited archived projects',
+    ],
     featured: false,
     cta: 'Get Started',
   },
   {
     name: 'Pro',
-    limits: { maxPages: 25, maxLayouts: 10, maxSnippets: 500 },
-    description: 'For freelancers and small teams.',
+    limits: {
+      maxPages: 150,
+      maxLayouts: 10,
+      maxSeats: 2,
+      maxCustomDomains: 1,
+      aiDailyLimit: 300,
+    },
+    description: 'For freelancers juggling several clients.',
     features: [
-      'AI customization',
-      'Custom CSS/JS overrides',
+      'Everything in Starter',
+      'Custom preview domain',
+      'Higher AI limits',
       'Priority support',
     ],
     featured: true,
     cta: 'Get Started',
   },
   {
-    name: 'Enterprise',
-    limits: { maxPages: -1, maxLayouts: -1, maxSnippets: -1 },
-    description: 'For agencies and larger teams.',
+    name: 'Agency',
+    limits: {
+      maxPages: -1,
+      maxLayouts: -1,
+      maxSeats: 5,
+      maxCustomDomains: 5,
+      aiDailyLimit: 1000,
+    },
+    description: 'For studios with a team.',
     features: [
       'Everything in Pro',
-      'Team workspaces',
-      'Custom snippet uploads',
-      'White-label publishing',
-      'API access',
-      'Dedicated support',
+      'Team workspace, 5 seats',
+      'Up to 5 custom domains',
+      'Unlimited active projects',
     ],
     featured: false,
-    cta: 'Contact Sales',
+    cta: 'Get Started',
   },
 ];
 
@@ -82,19 +115,23 @@ export const FALLBACK_TIER = PLAN_TIERS[0];
  * An empty string means "not created yet". It resolves to no tier, which lands
  * on FALLBACK_TIER with a Sentry alert, and the startup check in
  * PaddleCatalogService reports it explicitly.
+ *
+ * NOTE: the sandbox products were created under the old tier names (Basic /
+ * Enterprise). The ids below are unchanged and still resolve correctly — only
+ * the display names in the Paddle dashboard are now stale.
  */
 export const PRODUCT_IDS: Record<PaddleEnv, Record<TierName, string>> = {
   sandbox: {
-    Basic: 'pro_01kr05ng3syvh8a3w09cby3brs',
+    Starter: 'pro_01kr05ng3syvh8a3w09cby3brs',
     Pro: 'pro_01kr07sxjck6atwb035k666mye',
-    Enterprise: 'pro_01kr07tcnrjj8ec15gmzescmdw',
+    Agency: 'pro_01kr07tcnrjj8ec15gmzescmdw',
   },
   production: {
     // TODO: fill in once the live products exist. Until then every live
     // subscription resolves to the fallback tier and alerts.
-    Basic: '',
+    Starter: '',
     Pro: '',
-    Enterprise: '',
+    Agency: '',
   },
 };
 

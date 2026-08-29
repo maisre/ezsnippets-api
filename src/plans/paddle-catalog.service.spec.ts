@@ -7,11 +7,11 @@ jest.mock('@sentry/nestjs', () => ({
   captureException: jest.fn(),
 }));
 
-const BASIC_PRODUCT = PRODUCT_IDS.sandbox.Basic;
+const STARTER_PRODUCT = PRODUCT_IDS.sandbox.Starter;
 const PRO_PRODUCT = PRODUCT_IDS.sandbox.Pro;
 const PRO_MONTHLY = 'pri_pro_monthly';
 const PRO_YEARLY = 'pri_pro_yearly';
-const BASIC_MONTHLY = 'pri_basic_monthly';
+const STARTER_MONTHLY = 'pri_starter_monthly';
 
 /** A Paddle price as the SDK hands it to us (before flattening). */
 function sdkPrice(overrides: Partial<any> = {}): any {
@@ -116,7 +116,7 @@ describe('PaddleCatalogService', () => {
     it('includes only prices flagged for display in Paddle', async () => {
       const { service } = build([
         sdkPrice({ id: PRO_MONTHLY }),
-        sdkPrice({ id: BASIC_MONTHLY, productId: BASIC_PRODUCT, customData: null }),
+        sdkPrice({ id: STARTER_MONTHLY, productId: STARTER_PRODUCT, customData: null }),
       ]);
 
       const catalog = await service.getCatalog();
@@ -189,11 +189,11 @@ describe('PaddleCatalogService', () => {
     it('orders plans least to most generous, not however Paddle returned them', async () => {
       const { service } = build([
         sdkPrice({ id: PRO_MONTHLY }),
-        sdkPrice({ id: BASIC_MONTHLY, productId: BASIC_PRODUCT }),
+        sdkPrice({ id: STARTER_MONTHLY, productId: STARTER_PRODUCT }),
       ]);
 
       expect((await service.getCatalog()).plans.map((p) => p.name)).toEqual([
-        'Basic',
+        'Starter',
         'Pro',
       ]);
     });
@@ -317,9 +317,9 @@ describe('product id startup check', () => {
 
   it('passes silently when every configured product is active', async () => {
     const { service } = buildForEnv('sandbox', [
-      { id: PRODUCT_IDS.sandbox.Basic },
+      { id: PRODUCT_IDS.sandbox.Starter },
       { id: PRODUCT_IDS.sandbox.Pro },
-      { id: PRODUCT_IDS.sandbox.Enterprise },
+      { id: PRODUCT_IDS.sandbox.Agency },
     ]);
 
     service.onModuleInit();

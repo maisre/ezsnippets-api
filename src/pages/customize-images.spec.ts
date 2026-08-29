@@ -41,14 +41,20 @@ function buildService(opts: {
   // Metering is exercised in the ai-usage tests; here it just needs to allow the
   // call through so the image flow under test can run.
   const aiUsage: any = { consume: jest.fn().mockResolvedValue(undefined) };
+  // The AI ceiling is per-plan now, so metering resolves the org's tier before
+  // it spends. The numbers don't matter here — only that the lookup succeeds.
+  const orgsService: any = {
+    findOne: jest.fn().mockResolvedValue({ productId: 'prd_test' }),
+  };
+  const plansService: any = { getLimits: () => ({ aiDailyLimit: 1000 }) };
 
   const service = new PagesService(
     pageModel,
     pubsub,
     openai,
     snippetsService,
-    {} as any,
-    {} as any,
+    orgsService,
+    plansService,
     shutterstock,
     aiUsage,
   );

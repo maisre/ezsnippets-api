@@ -2,6 +2,7 @@ import {
   Inject,
   Injectable,
   Logger,
+  BadRequestException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
@@ -13,6 +14,7 @@ import { UpdatePageDto } from './dto/update-page.dto';
 import { RedisPubSubService } from '../redis';
 import { OpenaiService } from '../openai';
 import { AiUsageService } from '../ai-usage';
+import { TemplatesService } from '../templates/templates.service';
 import { SnippetsService } from '../snippets/snippets.service';
 import { OrgsService } from '../orgs/orgs.service';
 import { PlansService } from '../plans/plans.service';
@@ -34,6 +36,7 @@ export class PagesService {
     private readonly plansService: PlansService,
     private readonly shutterstockService: ShutterstockService,
     private readonly aiUsageService: AiUsageService,
+    private readonly templatesService: TemplatesService,
   ) {}
 
   async findAll(): Promise<Page[]> {
@@ -731,6 +734,102 @@ export class PagesService {
    * when the org can't be loaded, which leaves AiUsageService on its backstop
    * ceiling rather than unmetered.
    */
+  /**
+   * Start a new page from a template.
+   *
+   * Templates are blank by design, so instantiating one is just turning each
+   * snippet id into an empty abstract — no overrides to copy, and none of the
+   * Shutterstock comp ids that would otherwise ride along into every site made
+   * from the same template.
+   */
+  async createFromTemplate(
+    templateId: string,
+    dto: { name?: string; siteName?: string; description?: string },
+    orgId: string,
+    userId: string,
+  ): Promise<Page> {
+    const isMember = await this.orgsService.isUserMember(orgId, userId);
+    if (!isMember) {
+      throw new ForbiddenException('You do not belong to this organization.');
+    }
+
+    const template = await this.templatesService.findOne(templateId, orgId);
+    if (!template) {
+      throw new NotFoundException(`Template ${templateId} not found`);
+    }
+    if (template.kind === 'layout') {
+      throw new BadRequestException(
+        'That is a site template — start a layout from it, not a page.',
+      );
+    }
+
+    await this.enforceLimit(orgId);
+
+    const createdPage = new this.pageModel({
+      name: dto.name?.trim() || template.name,
+      siteName: dto.siteName?.trim() || undefined,
+      description: dto.description?.trim() || template.description,
+      snippets: template.snippetIds.map((id) => ({ id })),
+      org: new Types.ObjectId(orgId),
+      createdBy: new Types.ObjectId(userId),
+    });
+
+    return createdPage.save();
+  }
+
+  /**
+   * Drop a template's snippets into an existing page.
+   *
+   * Appends by default: replacing is destructive and there's no undo, so the
+   * caller has to ask for it explicitly.
+   */
+  async applyTemplate(
+    id: string,
+    templateId: string,
+    mode: 'append' | 'replace',
+    orgId: string,
+  ): Promise<Page> {
+    const page = await this.findOne(id, orgId);
+    if (!page) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+
+    const template = await this.templatesService.findOne(templateId, orgId);
+    if (!template) {
+      throw new NotFoundException(`Template ${templateId} not found`);
+    }
+    if (template.kind === 'layout') {
+      throw new BadRequestException(
+        'A site template cannot be applied to a single page.',
+      );
+    }
+
+    const incoming = template.snippetIds.map((snippetId) => ({ id: snippetId }));
+    const existing = (page.toObject().snippets || []).map(
+      ({ _id, ...rest }: any) => rest,
+    );
+    const snippets = mode === 'replace' ? incoming : [...existing, ...incoming];
+
+    const updated = await this.pageModel
+      .findOneAndUpdate(
+        { _id: id, org: orgId, deletedAt: null },
+        { $set: { snippets, contentUpdatedAt: new Date() } },
+        { new: true },
+      )
+      .exec();
+
+    if (!updated) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+
+    await this.pubsub.publish('page-updates', {
+      action: 'updated',
+      roomId: id,
+    });
+
+    return updated;
+  }
+
   private async aiLimitFor(orgId: string): Promise<number | undefined> {
     const org = await this.orgsService.findOne(orgId);
     if (!org) return undefined;

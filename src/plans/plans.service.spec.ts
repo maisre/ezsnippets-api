@@ -74,12 +74,13 @@ describe('PlansService', () => {
     });
 
     it('honours PLAN_LIMITS_OVERRIDE', () => {
-      const overridden = new PlansService('2,1,3,4,10', 'sandbox');
+      const overridden = new PlansService('2,1,3,4,5,10', 'sandbox');
       expect(overridden.getLimits(SANDBOX_PRO)).toEqual({
         maxPages: 2,
         maxLayouts: 1,
         maxSeats: 3,
         maxCustomDomains: 4,
+        maxSavedTemplates: 5,
         aiDailyLimit: 10,
       });
     });

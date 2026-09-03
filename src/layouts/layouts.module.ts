@@ -9,9 +9,10 @@ import { OrgsModule } from '../orgs/orgs.module';
 import { PlansModule } from '../plans/plans.module';
 import { ShutterstockModule } from '../shutterstock';
 import { AiUsageModule } from '../ai-usage';
+import { TemplatesModule } from '../templates/templates.module';
 
 @Module({
-  imports: [DatabaseModule, OpenaiModule.forRootAsync(), SnippetsModule, OrgsModule, forwardRef(() => PlansModule), ShutterstockModule, AiUsageModule],
+  imports: [DatabaseModule, OpenaiModule.forRootAsync(), SnippetsModule, OrgsModule, forwardRef(() => PlansModule), ShutterstockModule, AiUsageModule, forwardRef(() => TemplatesModule)],
   controllers: [LayoutsController],
   providers: [LayoutsService, ...layoutProviders],
   exports: [LayoutsService],

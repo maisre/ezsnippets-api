@@ -50,6 +50,29 @@ export class SnippetsService {
     };
   }
 
+  /**
+   * Which of the given ids exist and are visible to the org.
+   *
+   * One query rather than N lookups, because templates validate every snippet
+   * id they reference on save. Invalid ObjectIds are dropped before the query
+   * instead of throwing — a bad id is simply "doesn't exist" to the caller.
+   */
+  async findExistingIds(ids: string[], orgId?: string): Promise<Set<string>> {
+    const valid = ids.filter((id) => Types.ObjectId.isValid(id));
+    if (!valid.length) return new Set();
+
+    const visible = orgId
+      ? [{ org: { $exists: false } }, { org: null }, { org: orgId }]
+      : [{ org: { $exists: false } }, { org: null }];
+
+    const found = await this.snippetModel
+      .find({ _id: { $in: valid }, $or: visible })
+      .select('_id')
+      .exec();
+
+    return new Set(found.map((doc) => String(doc._id)));
+  }
+
   async findOne(id: string): Promise<Snippet | null> {
     if (!Types.ObjectId.isValid(id)) {
       return null;

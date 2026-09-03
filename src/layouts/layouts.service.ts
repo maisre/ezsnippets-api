@@ -2,6 +2,7 @@ import {
   Inject,
   Injectable,
   Logger,
+  BadRequestException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
@@ -12,6 +13,7 @@ import { CreateLayoutDto } from './dto/create-layout.dto';
 import { UpdateLayoutDto } from './dto/update-layout.dto';
 import { OpenaiService } from '../openai';
 import { AiUsageService } from '../ai-usage';
+import { TemplatesService } from '../templates/templates.service';
 import { SnippetsService } from '../snippets/snippets.service';
 import { OrgsService } from '../orgs/orgs.service';
 import { PlansService } from '../plans/plans.service';
@@ -19,6 +21,25 @@ import { hasActiveSubscription } from '../plans/subscription-status';
 import { ShutterstockService } from '../shutterstock';
 import { targetAspectFor, slotShapeFor } from '../shutterstock/target-dimensions';
 import { wrapAffiliate, imagePageUrl } from '../shutterstock/affiliate';
+
+/**
+ * Normalize a layout's `nav`/`footer` to a snippet abstract.
+ *
+ * Subpage snippets have always been stored as abstracts ({ id, ...overrides }),
+ * but nav and footer were written as bare id strings by the editor. Every
+ * consumer here guarded on `nav?.id`, which is false for a string — so AI text
+ * customization, image population and the licensing collector all silently
+ * skipped the nav and footer. Normalizing on read fixes that, and because the
+ * normalized value is what gets written back, a layout upgrades itself to the
+ * abstract shape the first time it's customized. ez-view already accepted both
+ * shapes, so nothing needed to change there.
+ */
+function toSnippetRef(value: any): any | null {
+  if (!value) return null;
+  if (typeof value === 'string') return { id: value };
+  if (typeof value === 'object' && value.id) return value;
+  return null;
+}
 
 @Injectable()
 export class LayoutsService {
@@ -32,6 +53,7 @@ export class LayoutsService {
     private readonly plansService: PlansService,
     private readonly shutterstockService: ShutterstockService,
     private readonly aiUsageService: AiUsageService,
+    private readonly templatesService: TemplatesService,
   ) {}
 
   async findAll(): Promise<Layout[]> {
@@ -266,11 +288,13 @@ export class LayoutsService {
     // Gather all snippet references from nav, footer, and subPages
     const allSnippetRefs: Array<{ ref: any; path: string; index?: number; subIndex?: number }> = [];
 
-    if ((layout.nav as any)?.id) {
-      allSnippetRefs.push({ ref: layout.nav, path: 'nav' });
+    const navRef = toSnippetRef(layout.nav);
+    const footerRef = toSnippetRef(layout.footer);
+    if (navRef) {
+      allSnippetRefs.push({ ref: navRef, path: 'nav' });
     }
-    if ((layout.footer as any)?.id) {
-      allSnippetRefs.push({ ref: layout.footer, path: 'footer' });
+    if (footerRef) {
+      allSnippetRefs.push({ ref: footerRef, path: 'footer' });
     }
     if (layout.subPages) {
       layout.subPages.forEach((sp: any, spIdx: number) => {
@@ -316,11 +340,11 @@ export class LayoutsService {
     if (snippetsInput.length === 0) {
       // No text replacements — just mark all snippet abstracts as customized
       const updateData: any = {};
-      if ((layout.nav as any)?.id) {
-        updateData.nav = markCustomized(layout.nav);
+      if (navRef) {
+        updateData.nav = markCustomized(navRef);
       }
-      if ((layout.footer as any)?.id) {
-        updateData.footer = markCustomized(layout.footer);
+      if (footerRef) {
+        updateData.footer = markCustomized(footerRef);
       }
       if (layout.subPages) {
         updateData.subPages = layout.subPages.map((sp: any) => {
@@ -377,11 +401,11 @@ export class LayoutsService {
 
     const updateData: any = {};
 
-    if ((layout.nav as any)?.id) {
-      updateData.nav = applyOverride(layout.nav);
+    if (navRef) {
+      updateData.nav = applyOverride(navRef);
     }
-    if ((layout.footer as any)?.id) {
-      updateData.footer = applyOverride(layout.footer);
+    if (footerRef) {
+      updateData.footer = applyOverride(footerRef);
     }
     if (layout.subPages) {
       updateData.subPages = layout.subPages.map((sp: any) => {
@@ -431,8 +455,10 @@ export class LayoutsService {
 
     // Every snippet-abstract position in the layout, flattened.
     const refs: any[] = [];
-    if ((layout.nav as any)?.id) refs.push(layout.nav);
-    if ((layout.footer as any)?.id) refs.push(layout.footer);
+    const navRef = toSnippetRef(layout.nav);
+    const footerRef = toSnippetRef(layout.footer);
+    if (navRef) refs.push(navRef);
+    if (footerRef) refs.push(footerRef);
     (layout.subPages || []).forEach((sp: any) => {
       (sp.snippets || []).forEach((s: any) => refs.push(s));
     });
@@ -565,8 +591,8 @@ export class LayoutsService {
     };
 
     const updateData: any = {};
-    if ((layout.nav as any)?.id) updateData.nav = applyPicks(layout.nav);
-    if ((layout.footer as any)?.id) updateData.footer = applyPicks(layout.footer);
+    if (navRef) updateData.nav = applyPicks(navRef);
+    if (footerRef) updateData.footer = applyPicks(footerRef);
     if (layout.subPages) {
       updateData.subPages = layout.subPages.map((sp: any) => {
         const spObj = sp.toObject ? sp.toObject() : { ...sp };
@@ -633,8 +659,10 @@ export class LayoutsService {
         }
       }
     };
-    if ((layout.nav as any)?.id) collect(layout.nav);
-    if ((layout.footer as any)?.id) collect(layout.footer);
+    const navRef = toSnippetRef(layout.nav);
+    const footerRef = toSnippetRef(layout.footer);
+    if (navRef) collect(navRef);
+    if (footerRef) collect(footerRef);
     for (const sp of (layout.subPages as any[]) || []) {
       for (const s of sp.snippets || []) collect(s);
     }
@@ -746,6 +774,132 @@ export class LayoutsService {
    * when the org can't be loaded, which leaves AiUsageService on its backstop
    * ceiling rather than unmetered.
    */
+  /**
+   * Start a new site from a layout template: one nav, one footer, and the
+   * template's named subpages, all blank.
+   *
+   * nav and footer are written as snippet abstracts rather than the bare id
+   * strings the editor used to save, so a layout created this way is already in
+   * the shape the rest of the service expects (see toSnippetRef).
+   */
+  async createFromTemplate(
+    templateId: string,
+    dto: { name?: string; siteName?: string; description?: string },
+    orgId: string,
+    userId: string,
+  ): Promise<Layout> {
+    const isMember = await this.orgsService.isUserMember(orgId, userId);
+    if (!isMember) {
+      throw new ForbiddenException('You do not belong to this organization.');
+    }
+
+    const template = await this.templatesService.findOne(templateId, orgId);
+    if (!template) {
+      throw new NotFoundException(`Template ${templateId} not found`);
+    }
+    if (template.kind !== 'layout') {
+      throw new BadRequestException(
+        'That is a page template — start a page from it, not a site.',
+      );
+    }
+
+    await this.enforceLimit(orgId);
+
+    const created = new this.layoutModel({
+      name: dto.name?.trim() || template.name,
+      siteName: dto.siteName?.trim() || undefined,
+      description: dto.description?.trim() || template.description,
+      nav: template.nav ? { id: template.nav } : undefined,
+      footer: template.footer ? { id: template.footer } : undefined,
+      subPages: (template.subPages ?? []).map((sp) => ({
+        name: sp.name,
+        snippets: (sp.snippetIds ?? []).map((id) => ({ id })),
+      })),
+      org: new Types.ObjectId(orgId),
+      createdBy: new Types.ObjectId(userId),
+    });
+
+    return created.save();
+  }
+
+  /**
+   * Apply a template to an existing layout.
+   *
+   * A layout-kind template replaces the whole shell — nav, footer and subpages.
+   * A page or partial template lands in one subpage instead, which is how a
+   * saved group of snippets gets reused inside a site.
+   */
+  async applyTemplate(
+    id: string,
+    templateId: string,
+    mode: 'append' | 'replace',
+    orgId: string,
+    subPageIndex?: number,
+  ): Promise<Layout> {
+    const layout = await this.findOne(id, orgId);
+    if (!layout) {
+      throw new NotFoundException(`Layout with id ${id} not found`);
+    }
+
+    const template = await this.templatesService.findOne(templateId, orgId);
+    if (!template) {
+      throw new NotFoundException(`Template ${templateId} not found`);
+    }
+
+    const updateData: any = {};
+
+    if (template.kind === 'layout') {
+      updateData.nav = template.nav ? { id: template.nav } : undefined;
+      updateData.footer = template.footer ? { id: template.footer } : undefined;
+      const incoming = (template.subPages ?? []).map((sp) => ({
+        name: sp.name,
+        snippets: (sp.snippetIds ?? []).map((snippetId) => ({ id: snippetId })),
+      }));
+      const existing = (layout.toObject().subPages || []).map(
+        ({ _id, ...rest }: any) => rest,
+      );
+      updateData.subPages =
+        mode === 'replace' ? incoming : [...existing, ...incoming];
+    } else {
+      const subPages = (layout.toObject().subPages || []).map(
+        ({ _id, ...rest }: any) => rest,
+      );
+      const index = subPageIndex ?? 0;
+      if (!subPages[index]) {
+        throw new BadRequestException(
+          `This layout has no subpage at position ${index}.`,
+        );
+      }
+
+      const incoming = template.snippetIds.map((snippetId) => ({
+        id: snippetId,
+      }));
+      subPages[index] = {
+        ...subPages[index],
+        snippets:
+          mode === 'replace'
+            ? incoming
+            : [...(subPages[index].snippets || []), ...incoming],
+      };
+      updateData.subPages = subPages;
+    }
+
+    updateData.contentUpdatedAt = new Date();
+
+    const updated = await this.layoutModel
+      .findOneAndUpdate(
+        { _id: id, org: orgId, deletedAt: null },
+        { $set: updateData },
+        { new: true },
+      )
+      .exec();
+
+    if (!updated) {
+      throw new NotFoundException(`Layout with id ${id} not found`);
+    }
+    return updated;
+  }
+
   private async aiLimitFor(orgId: string): Promise<number | undefined> {
     const org = await this.orgsService.findOne(orgId);
     if (!org) return undefined;

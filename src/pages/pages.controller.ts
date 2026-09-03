@@ -18,6 +18,10 @@ import { PagesService } from './pages.service';
 import { Page } from './interfaces/page.interface';
 import { CreatePageDto } from './dto/create-page.dto';
 import { UpdatePageDto } from './dto/update-page.dto';
+import {
+  ApplyTemplateDto,
+  CreateFromTemplateDto,
+} from '../templates/dto/apply-template.dto';
 import { CustomizeImagesDto } from './dto/customize-images.dto';
 import { CustomizeDto } from './dto/customize.dto';
 import { JwtAuthGuard } from '../auth/jwt.strategy';
@@ -59,6 +63,42 @@ export class PagesController {
     @Request() req,
   ): Promise<Page> {
     return this.pagesService.update(id, updatePageDto, req.user.activeOrg);
+  }
+
+  /**
+   * Start a page from a template. Separate from POST /pages rather than an
+   * optional field on it, so "blank page" and "from template" can't be
+   * confused by a half-filled body.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('from-template/:templateId')
+  async createFromTemplate(
+    @Param('templateId') templateId: string,
+    @Body() dto: CreateFromTemplateDto,
+    @Request() req,
+  ): Promise<Page> {
+    return this.pagesService.createFromTemplate(
+      templateId,
+      dto ?? {},
+      req.user.activeOrg,
+      req.user.userId,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/apply-template/:templateId')
+  async applyTemplate(
+    @Param('id') id: string,
+    @Param('templateId') templateId: string,
+    @Body() dto: ApplyTemplateDto,
+    @Request() req,
+  ): Promise<Page> {
+    return this.pagesService.applyTemplate(
+      id,
+      templateId,
+      dto?.mode ?? 'append',
+      req.user.activeOrg,
+    );
   }
 
   @UseGuards(JwtAuthGuard)

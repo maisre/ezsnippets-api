@@ -20,6 +20,11 @@ export interface PlanLimits {
    * host-header routing yet.
    */
   maxCustomDomains: number;
+  /**
+   * Saved templates the org may keep. 0 means the org can use the built-in
+   * library but can't save its own — the entry tier's fence.
+   */
+  maxSavedTemplates: number;
   /** AI requests per UTC day, enforced by AiUsageService. */
   aiDailyLimit: number;
 }

@@ -14,6 +14,10 @@ import {
   Body,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import {
+  ApplyTemplateDto,
+  CreateFromTemplateDto,
+} from '../templates/dto/apply-template.dto';
 import { LayoutsService } from './layouts.service';
 import { Layout } from './interfaces/layout.interface';
 import { CreateLayoutDto } from './dto/create-layout.dto';
@@ -59,6 +63,39 @@ export class LayoutsController {
     @Request() req,
   ): Promise<Layout> {
     return this.layoutsService.update(id, updateLayoutDto, req.user.activeOrg);
+  }
+
+  /** Start a whole site — nav, footer and subpages — from a layout template. */
+  @UseGuards(JwtAuthGuard)
+  @Post('from-template/:templateId')
+  async createFromTemplate(
+    @Param('templateId') templateId: string,
+    @Body() dto: CreateFromTemplateDto,
+    @Request() req,
+  ): Promise<Layout> {
+    return this.layoutsService.createFromTemplate(
+      templateId,
+      dto ?? {},
+      req.user.activeOrg,
+      req.user.userId,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/apply-template/:templateId')
+  async applyTemplate(
+    @Param('id') id: string,
+    @Param('templateId') templateId: string,
+    @Body() dto: ApplyTemplateDto,
+    @Request() req,
+  ): Promise<Layout> {
+    return this.layoutsService.applyTemplate(
+      id,
+      templateId,
+      dto?.mode ?? 'append',
+      req.user.activeOrg,
+      dto?.subPageIndex,
+    );
   }
 
   @UseGuards(JwtAuthGuard)

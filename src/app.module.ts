@@ -14,6 +14,7 @@ import { OrgsModule } from './orgs/orgs.module';
 import { PlansModule } from './plans/plans.module';
 import { SqsModule } from './sqs/sqs.module';
 import { UploadsModule } from './uploads/uploads.module';
+import { TemplatesModule } from './templates/templates.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { UploadsModule } from './uploads/uploads.module';
     OrgsModule,
     PlansModule,
     UploadsModule,
+    TemplatesModule,
   ],
   controllers: [AppController],
   providers: [

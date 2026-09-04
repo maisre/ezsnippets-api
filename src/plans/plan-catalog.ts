@@ -131,11 +131,9 @@ export const PRODUCT_IDS: Record<PaddleEnv, Record<TierName, string>> = {
     Agency: 'pro_01kr07tcnrjj8ec15gmzescmdw',
   },
   production: {
-    // TODO: fill in once the live products exist. Until then every live
-    // subscription resolves to the fallback tier and alerts.
-    Starter: '',
-    Pro: '',
-    Agency: '',
+    Starter: 'pro_01m1q251pbn447k18nt6s17xqf',
+    Pro: 'pro_01m1q251z72b3j38ysc5n63and',
+    Agency: 'pro_01m1q2529nh9mq4e89qemf35nc',
   },
 };
 

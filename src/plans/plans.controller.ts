@@ -37,12 +37,18 @@ export class PlansController {
     // Mirrors what enforceLimit actually allows — a lapsed subscription reads
     // as "no plan" here so the dashboard doesn't advertise limits the API will
     // refuse to honour.
+    // paddleCustomerId is returned either way: it identifies who the customer
+    // is, not what they're entitled to. Paddle.js needs it as `pwCustomer` for
+    // Retain, and a lapsed customer is exactly who Retain wants to win back.
+    const paddleCustomerId = org?.paddleCustomerId ?? null;
+
     if (!hasActiveSubscription(org)) {
       return {
         hasPlan: false,
         plan: null,
         limits: null,
         usage: null,
+        paddleCustomerId,
       };
     }
 
@@ -59,6 +65,7 @@ export class PlansController {
         pages: pageCount,
         layouts: layoutCount,
       },
+      paddleCustomerId,
     };
   }
 }

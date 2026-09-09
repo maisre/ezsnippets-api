@@ -15,7 +15,20 @@ export interface PlanTier {
    * Paddle, which is the catalog's system of record.
    */
   description: string;
-  /** Selling points beyond the limits, which are rendered from `limits`. */
+  /**
+   * Selling points *beyond* the limits — never a restatement of one.
+   *
+   * The pricing card renders `limitFeatures(plan)` and then this array, so
+   * anything here that a limit already covers shows up twice on the card. That
+   * had happened to Pro and Agency: both repeated saved templates and custom
+   * domains, Agency repeated its seat count and its unlimited projects, and Pro
+   * carried "Higher AI limits" directly under "300 AI requests/day".
+   *
+   * The frontend already derives, from `limits`: active layouts, pages, seats,
+   * AI requests/day, "Save your own templates" (whenever maxSavedTemplates is
+   * non-zero), and custom preview domains (whenever maxCustomDomains > 0). Say
+   * none of those here.
+   */
   features: string[];
   featured: boolean;
   cta: string;
@@ -70,13 +83,7 @@ export const PLAN_TIERS: PlanTier[] = [
       aiDailyLimit: 300,
     },
     description: 'For freelancers juggling several clients.',
-    features: [
-      'Everything in Starter',
-      'Save your own templates',
-      'Custom preview domain',
-      'Higher AI limits',
-      'Priority support',
-    ],
+    features: ['Everything in Starter', 'Priority support'],
     featured: true,
     cta: 'Get Started',
   },
@@ -91,12 +98,7 @@ export const PLAN_TIERS: PlanTier[] = [
       aiDailyLimit: 1000,
     },
     description: 'For studios with a team.',
-    features: [
-      'Everything in Pro',
-      'Team workspace, 5 seats',
-      'Up to 5 custom domains',
-      'Unlimited active projects',
-    ],
+    features: ['Everything in Pro', 'Team workspace'],
     featured: false,
     cta: 'Get Started',
   },

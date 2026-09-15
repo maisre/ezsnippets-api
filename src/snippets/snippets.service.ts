@@ -19,18 +19,19 @@ export class SnippetsService {
       .exec();
   }
 
+  /**
+   * The whole library, projected down to what the palette and the page
+   * structure list need. Deliberately uncapped: the editor resolves a page's
+   * stored snippet ids against this list, so a truncated window silently drops
+   * rows for any snippet outside it — templates reference the full library, so
+   * the old limit(200) hid most of a template's snippets. The projection keeps
+   * this small (~150KB across 1580 snippets) and it is fetched once per load.
+   */
   async findAllSummary(orgId?: string): Promise<Snippet[]> {
-    if (orgId) {
-      return this.snippetModel
-        .find({ $or: [{ org: { $exists: false } }, { org: null }, { org: orgId }] })
-        .select('_id type tags')
-        .limit(200)
-        .exec();
-    }
+    const shared = [{ org: { $exists: false } }, { org: null }];
     return this.snippetModel
-      .find({ $or: [{ org: { $exists: false } }, { org: null }] })
+      .find({ $or: orgId ? [...shared, { org: orgId }] : shared })
       .select('_id type tags')
-      .limit(200)
       .exec();
   }
 

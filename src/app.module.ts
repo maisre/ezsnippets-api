@@ -15,6 +15,7 @@ import { PlansModule } from './plans/plans.module';
 import { SqsModule } from './sqs/sqs.module';
 import { UploadsModule } from './uploads/uploads.module';
 import { TemplatesModule } from './templates/templates.module';
+import { DomainsModule } from './domains/domains.module';
 
 @Module({
   imports: [
@@ -31,6 +32,7 @@ import { TemplatesModule } from './templates/templates.module';
     PlansModule,
     UploadsModule,
     TemplatesModule,
+    DomainsModule,
   ],
   controllers: [AppController],
   providers: [

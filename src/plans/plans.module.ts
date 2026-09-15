@@ -9,6 +9,7 @@ import { DatabaseModule } from '../database/database.module';
 import { OrgsModule } from '../orgs/orgs.module';
 import { PagesModule } from '../pages/pages.module';
 import { LayoutsModule } from '../layouts/layouts.module';
+import { DomainsModule } from '../domains/domains.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { LayoutsModule } from '../layouts/layouts.module';
     OrgsModule,
     forwardRef(() => PagesModule),
     forwardRef(() => LayoutsModule),
+    forwardRef(() => DomainsModule),
   ],
   controllers: [PlansController],
   providers: [

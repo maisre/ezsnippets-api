@@ -1,5 +1,6 @@
 import { ServiceUnavailableException } from '@nestjs/common';
 import JSZip from 'jszip';
+import { slugify as toSlug } from '../common/slugify';
 
 // Shared static-site export used by both pages and layouts. Fetches a rendered
 // HTML document from ez-view (the single rendering source), strips the editor's
@@ -36,7 +37,7 @@ export async function exportSiteZip(
   zip.file('README.txt', readme(countManifestRows(opts.licensingCsv)));
 
   const buffer = await zip.generateAsync({ type: 'nodebuffer' });
-  return { buffer, filename: `${slugify(opts.name)}.zip` };
+  return { buffer, filename: `${(toSlug(opts.name) || 'site')}.zip` };
 }
 
 // The live-reload script is for the editor preview, not a published static site
@@ -120,15 +121,6 @@ function extFor(url: string, contentType: string): string {
 function countManifestRows(csv: string): number {
   const lines = csv.trim().split('\n').filter(Boolean);
   return Math.max(0, lines.length - 1); // minus the header row
-}
-
-function slugify(name: string): string {
-  return (
-    (name || 'site')
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '') || 'site'
-  );
 }
 
 function readme(imageCount: number): string {

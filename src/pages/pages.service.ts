@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
@@ -22,6 +23,8 @@ import { hasActiveSubscription } from '../plans/subscription-status';
 import { ShutterstockService } from '../shutterstock';
 import { targetAspectFor, slotShapeFor } from '../shutterstock/target-dimensions';
 import { wrapAffiliate, imagePageUrl } from '../shutterstock/affiliate';
+import { validateSlug } from '../common/slug-rules';
+import { assertSlugAvailable } from '../common/slug-conflict';
 
 @Injectable()
 export class PagesService {
@@ -151,6 +154,22 @@ export class PagesService {
       updateData.description = updatePageDto.description;
     if (updatePageDto.textVariant !== undefined)
       updateData.textVariant = updatePageDto.textVariant;
+    if (updatePageDto.slug !== undefined) {
+      const check = validateSlug(updatePageDto.slug);
+      if (!check.ok) {
+        throw new BadRequestException(check.reason);
+      }
+      if (check.value) {
+        // Layouts share the same /:slug namespace on a custom domain.
+        await assertSlugAvailable(
+          this.pageModel.db,
+          orgId,
+          check.value,
+          'layouts',
+        );
+      }
+      updateData.slug = check.value;
+    }
     if (updatePageDto.snippets !== undefined) {
       // The snippet-list editor (ez-frontend page-edit) owns membership and
       // order, but not the page-scoped customizations (AI text/image overrides,
@@ -174,13 +193,26 @@ export class PagesService {
     // Mark the page dirty so ez-background re-screenshots it once edits settle.
     updateData.contentUpdatedAt = new Date();
 
-    const updatedPage = await this.pageModel
-      .findOneAndUpdate(
-        { _id: id, org: orgId },
-        { $set: updateData },
-        { new: true },
-      )
-      .exec();
+    let updatedPage: Page | null;
+    try {
+      updatedPage = await this.pageModel
+        .findOneAndUpdate(
+          { _id: id, org: orgId },
+          { $set: updateData },
+          { new: true },
+        )
+        .exec();
+    } catch (err: any) {
+      // The partial unique index on { org, slug } is what actually prevents two
+      // of this org's pages sharing a URL. Translate it rather than letting a
+      // raw E11000 reach the editor.
+      if (err?.code === 11000 && updateData.slug) {
+        throw new ConflictException(
+          `Another page already uses "${updateData.slug}".`,
+        );
+      }
+      throw err;
+    }
 
     if (!updatedPage) {
       throw new NotFoundException(`Page with id ${id} not found`);

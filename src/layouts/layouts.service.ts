@@ -3,6 +3,7 @@ import {
   Injectable,
   Logger,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
@@ -21,6 +22,8 @@ import { hasActiveSubscription } from '../plans/subscription-status';
 import { ShutterstockService } from '../shutterstock';
 import { targetAspectFor, slotShapeFor } from '../shutterstock/target-dimensions';
 import { wrapAffiliate, imagePageUrl } from '../shutterstock/affiliate';
+import { validateSlug } from '../common/slug-rules';
+import { assertSlugAvailable } from '../common/slug-conflict';
 
 /**
  * Normalize a layout's `nav`/`footer` to a snippet abstract.
@@ -166,6 +169,22 @@ export class LayoutsService {
       updateData.siteName = updateLayoutDto.siteName;
     if (updateLayoutDto.description !== undefined)
       updateData.description = updateLayoutDto.description;
+    if (updateLayoutDto.slug !== undefined) {
+      const check = validateSlug(updateLayoutDto.slug);
+      if (!check.ok) {
+        throw new BadRequestException(check.reason);
+      }
+      if (check.value) {
+        // Pages share the same /:slug namespace on a custom domain.
+        await assertSlugAvailable(
+          this.layoutModel.db,
+          orgId,
+          check.value,
+          'pages',
+        );
+      }
+      updateData.slug = check.value;
+    }
     if (updateLayoutDto.nav !== undefined) updateData.nav = updateLayoutDto.nav;
     if (updateLayoutDto.footer !== undefined)
       updateData.footer = updateLayoutDto.footer;
@@ -190,13 +209,25 @@ export class LayoutsService {
     // Mark the layout dirty so ez-background re-screenshots it once edits settle.
     updateData.contentUpdatedAt = new Date();
 
-    const updatedLayout = await this.layoutModel
-      .findOneAndUpdate(
-        { _id: id, org: orgId },
-        { $set: updateData },
-        { new: true },
-      )
-      .exec();
+    let updatedLayout: Layout | null;
+    try {
+      updatedLayout = await this.layoutModel
+        .findOneAndUpdate(
+          { _id: id, org: orgId },
+          { $set: updateData },
+          { new: true },
+        )
+        .exec();
+    } catch (err: any) {
+      // The partial unique index on { org, slug } is the real guard; translate
+      // it rather than letting a raw E11000 reach the editor.
+      if (err?.code === 11000 && updateData.slug) {
+        throw new ConflictException(
+          `Another site already uses "${updateData.slug}".`,
+        );
+      }
+      throw err;
+    }
 
     if (!updatedLayout) {
       throw new NotFoundException(`Layout with id ${id} not found`);

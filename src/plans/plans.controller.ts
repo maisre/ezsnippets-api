@@ -5,6 +5,7 @@ import { hasActiveSubscription } from './subscription-status';
 import { OrgsService } from '../orgs/orgs.service';
 import { PagesService } from '../pages/pages.service';
 import { LayoutsService } from '../layouts/layouts.service';
+import { DomainsService } from '../domains/domains.service';
 import { JwtAuthGuard } from '../auth/jwt.strategy';
 
 @Controller('plans')
@@ -15,6 +16,7 @@ export class PlansController {
     private readonly orgsService: OrgsService,
     private readonly pagesService: PagesService,
     private readonly layoutsService: LayoutsService,
+    private readonly domainsService: DomainsService,
   ) {}
 
   /**
@@ -52,9 +54,10 @@ export class PlansController {
       };
     }
 
-    const [pageCount, layoutCount] = await Promise.all([
+    const [pageCount, layoutCount, domainCount] = await Promise.all([
       this.pagesService.countForOrg(orgId),
       this.layoutsService.countForOrg(orgId),
+      this.domainsService.countForOrg(orgId),
     ]);
 
     return {
@@ -64,6 +67,7 @@ export class PlansController {
       usage: {
         pages: pageCount,
         layouts: layoutCount,
+        domains: domainCount,
       },
       paddleCustomerId,
     };

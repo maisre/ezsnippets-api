@@ -19,6 +19,14 @@ export class UpdateLayoutDto {
   @IsOptional()
   subPages?: SubPage[];
 
+  /**
+   * Custom URL segment. Send an empty string to clear it. Validated in
+   * LayoutsService.update via common/slug-rules.
+   */
+  @IsString()
+  @IsOptional()
+  slug?: string | null;
+
   @IsString()
   @IsOptional()
   siteName?: string;

@@ -18,6 +18,10 @@ export const LayoutSchema = new mongoose.Schema(
       enum: ['active', 'archived'],
       default: 'active',
     },
+    // Human-readable URL segment, served from the root of the org's custom
+    // domain (view.theirs.com/stans-hvac). Shares one namespace with page
+    // slugs — see common/slug-conflict.ts. Null means id-only access.
+    slug: { type: String, default: null },
     // Soft delete. Null (or absent, on pre-existing documents) means live.
     deletedAt: { type: Date, default: null },
     org: {
@@ -56,3 +60,10 @@ export const LayoutSchema = new mongoose.Schema(
 );
 
 LayoutSchema.index({ contentUpdatedAt: 1, screenshotAt: 1 });
+
+// Unique per ORG, not globally: the custom hostname already identifies the org.
+// Partial so the many layouts with no slug don't all collide on null.
+LayoutSchema.index(
+  { org: 1, slug: 1 },
+  { unique: true, partialFilterExpression: { slug: { $type: 'string' } } },
+);

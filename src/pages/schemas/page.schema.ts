@@ -23,6 +23,10 @@ export const PageSchema = new mongoose.Schema(
       enum: ['active', 'archived'],
       default: 'active',
     },
+    // Human-readable URL segment, served from the root of the org's custom
+    // domain (view.theirs.com/stans-hvac). Null means the page is only
+    // reachable by id. Unique per org, not globally — see the index below.
+    slug: { type: String, default: null },
     // Soft delete. Null (or absent, on pre-existing documents) means live.
     deletedAt: { type: Date, default: null },
     org: { type: mongoose.Schema.Types.ObjectId, ref: 'org', required: true },
@@ -63,3 +67,12 @@ export const PageSchema = new mongoose.Schema(
 // Backs the ez-background scanner's "which docs are due for a screenshot?"
 // query: it filters/sorts on contentUpdatedAt and compares against screenshotAt.
 PageSchema.index({ contentUpdatedAt: 1, screenshotAt: 1 });
+
+// Slugs are unique per ORG, not globally: the custom hostname already
+// identifies the org, so two customers can both have a page at /contact
+// without colliding. Partial so the many pages with no slug (every Starter
+// page, and any Pro page the customer hasn't named) don't all collide on null.
+PageSchema.index(
+  { org: 1, slug: 1 },
+  { unique: true, partialFilterExpression: { slug: { $type: 'string' } } },
+);

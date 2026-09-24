@@ -341,14 +341,25 @@ describe('product id startup check', () => {
   });
 
   it('alerts when a tier has no product id configured at all', async () => {
-    const { service } = buildForEnv('production');
+    // This used to lean on PRODUCT_IDS.production being empty placeholders,
+    // which stopped being true once the live products were created — the
+    // branch then became unreachable and the assertion silently tested the
+    // "ids not active in the account" path instead. Blank one tier explicitly
+    // so the case under test is the case named in the title.
+    const realStarter = PRODUCT_IDS.production.Starter;
+    PRODUCT_IDS.production.Starter = '';
+    try {
+      const { service } = buildForEnv('production');
 
-    service.onModuleInit();
-    await settle();
-    expect(Sentry.captureMessage).toHaveBeenCalledWith(
-      expect.stringContaining('No Paddle product id set'),
-      expect.objectContaining({ level: 'error' }),
-    );
+      service.onModuleInit();
+      await settle();
+      expect(Sentry.captureMessage).toHaveBeenCalledWith(
+        expect.stringContaining('No Paddle product id set for Starter'),
+        expect.objectContaining({ level: 'error' }),
+      );
+    } finally {
+      PRODUCT_IDS.production.Starter = realStarter;
+    }
   });
 
   it('does not cry wolf when Paddle itself is unreachable', async () => {

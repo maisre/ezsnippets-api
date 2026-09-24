@@ -18,6 +18,15 @@ export interface BillingEvent {
   occurredAt?: Date;
 }
 
+// A library snippet starred by someone in the org. The id is a snippet's
+// ObjectId as a string — favorites are a pointer into the shared library, never
+// a copy of it.
+export interface FavoriteSnippet {
+  snippetId: string;
+  createdBy?: Types.ObjectId;
+  addedAt?: Date;
+}
+
 export interface Org extends Document {
   readonly name: string;
   readonly personal: boolean;
@@ -39,6 +48,8 @@ export interface Org extends Document {
   // subscriptionStatus, which stays whatever Paddle says it is.
   billingBlocked?: boolean;
   billingEvents?: BillingEvent[];
+  // Shared across the whole org, not per-member — see favorites.ts.
+  favoriteSnippets?: FavoriteSnippet[];
   // occurred_at of the last subscription event applied. Paddle doesn't order
   // its webhooks, so this is how we drop ones that arrive late.
   subscriptionEventAt?: Date;

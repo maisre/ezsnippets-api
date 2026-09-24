@@ -25,6 +25,14 @@ import {
 import { CustomizeImagesDto } from './dto/customize-images.dto';
 import { CustomizeDto } from './dto/customize.dto';
 import { JwtAuthGuard } from '../auth/jwt.strategy';
+import {
+  ParkSnippetDto,
+  RestoreSnippetDto,
+  ReorderScratchPadDto,
+  requireIndex,
+  optionalIndex,
+} from './dto/scratch-pad.dto';
+import { SCRATCH_PAD_LIMIT } from '../common/scratch-pad';
 
 @Controller('pages')
 export class PagesController {
@@ -134,6 +142,84 @@ export class PagesController {
       replaceExisting: dto?.replaceExisting,
       onlyMissing: dto?.onlyMissing,
     });
+  }
+
+  // --- Scratch pad ---------------------------------------------------------
+  //
+  // The editor sends indexes and the server moves its own stored snippet. It
+  // deliberately does not accept snippet bodies: the editor does not hold the
+  // page-scoped customizations (see PagesService.mergeSnippets), so letting it
+  // post them back would drop text overrides, image replacements and
+  // shutterstockId on every park.
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/scratch-pad')
+  async getScratchPad(@Param('id') id: string, @Request() req) {
+    const page = await this.pagesService.findOne(id, req.user.activeOrg);
+    if (!page) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+    return { scratchPad: page.scratchPad || [], limit: SCRATCH_PAD_LIMIT };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/scratch-pad/park')
+  async parkSnippet(
+    @Param('id') id: string,
+    @Body() dto: ParkSnippetDto,
+    @Request() req,
+  ): Promise<Page> {
+    return this.pagesService.parkSnippet(
+      id,
+      req.user.activeOrg,
+      requireIndex(dto?.index, 'index'),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/scratch-pad/restore')
+  async restoreSnippet(
+    @Param('id') id: string,
+    @Body() dto: RestoreSnippetDto,
+    @Request() req,
+  ): Promise<Page> {
+    return this.pagesService.restoreSnippet(
+      id,
+      req.user.activeOrg,
+      requireIndex(dto?.scratchIndex, 'scratchIndex'),
+      optionalIndex(dto?.toIndex, 'toIndex'),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/scratch-pad/reorder')
+  async reorderScratchPad(
+    @Param('id') id: string,
+    @Body() dto: ReorderScratchPadDto,
+    @Request() req,
+  ): Promise<Page> {
+    return this.pagesService.reorderScratchPad(
+      id,
+      req.user.activeOrg,
+      requireIndex(dto?.from, 'from'),
+      requireIndex(dto?.to, 'to'),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/scratch-pad/:scratchIndex')
+  async discardScratchSnippet(
+    @Param('id') id: string,
+    @Param('scratchIndex') scratchIndex: string,
+    @Request() req,
+  ): Promise<Page> {
+    // Route params are strings; parse before the service's integer check so a
+    // junk segment reads as a 400 rather than NaN reaching an array splice.
+    return this.pagesService.discardScratchSnippet(
+      id,
+      req.user.activeOrg,
+      requireIndex(Number(scratchIndex), 'scratchIndex'),
+    );
   }
 
   // Shutterstock images the user must license before publishing the download.

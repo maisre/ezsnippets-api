@@ -15,6 +15,14 @@ export const PageSchema = new mongoose.Schema(
       default: 'generic',
     },
     snippets: Array<SnippetAbstract>,
+    // Editor scratch pad: snippets pulled off the page while the user decides
+    // on look and feel. Same type as `snippets` above, deliberately — a park or
+    // restore is then an array move rather than a conversion, so overrides and
+    // shutterstockId survive the round trip intact.
+    //
+    // Capped at SCRATCH_PAD_LIMIT, and excluded from getLicensing() and the
+    // .zip export: a parked snippet is not on the page. See common/scratch-pad.
+    scratchPad: { type: Array<SnippetAbstract>, default: [] },
     // Archived pages are parked: they stop counting toward the org's plan limit
     // and stop rendering publicly in ez-view, but stay listed in the dashboard
     // and can be restored (which re-checks the limit).

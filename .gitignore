@@ -87,3 +87,7 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # assets bucket by scripts/upload-snippet-shots.js; S3 is the source of truth,
 # not git.
 /snippet-shots/
+
+# Operational input for scripts/create-account.js — real customer email
+# addresses, and generated passwords if you paste them back in. Never commit.
+accounts.json

@@ -9,6 +9,8 @@ export interface Layout extends Document {
   readonly nav?: SnippetAbstract;
   readonly footer?: SnippetAbstract;
   readonly subPages: SubPage[];
+  /** Parked snippets, layout-wide — see common/scratch-pad.ts. */
+  readonly scratchPad?: SnippetAbstract[];
   readonly status?: 'active' | 'archived';
   readonly deletedAt?: Date | null;
   readonly org: Types.ObjectId;

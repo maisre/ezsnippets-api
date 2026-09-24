@@ -25,6 +25,12 @@ import { targetAspectFor, slotShapeFor } from '../shutterstock/target-dimensions
 import { wrapAffiliate, imagePageUrl } from '../shutterstock/affiliate';
 import { validateSlug } from '../common/slug-rules';
 import { assertSlugAvailable } from '../common/slug-conflict';
+import {
+  SCRATCH_PAD_LIMIT,
+  SCRATCH_PAD_FULL_MESSAGE,
+  isValidIndex,
+  clampInsertIndex,
+} from '../common/scratch-pad';
 
 @Injectable()
 export class PagesService {
@@ -223,6 +229,151 @@ export class PagesService {
       roomId: id,
     });
     return updatedPage;
+  }
+
+  // ---------------------------------------------------------------------
+  // Scratch pad
+  //
+  // Every move below is done server-side on the stored document. The editor
+  // sends indexes, never snippet bodies. That is not a style preference: the
+  // editor holds membership and order but not the page-scoped customizations
+  // (see mergeSnippets right below this block), so a client-driven move would
+  // write back a snippet stripped of its text overrides, image replacements
+  // and shutterstockId. Moving by index makes that failure impossible rather
+  // than something a merge has to repair afterwards.
+  // ---------------------------------------------------------------------
+
+  /** Load a page for a scratch pad move, or throw the usual 404. */
+  private async loadForScratchPad(id: string, orgId: string): Promise<Page> {
+    const page = await this.findOne(id, orgId);
+    if (!page) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+    return page;
+  }
+
+  /**
+   * Persist a scratch pad move.
+   *
+   * `touchesRender` is the whole reason this helper exists. update() bumps
+   * contentUpdatedAt unconditionally, which is right for it but wrong here:
+   * shuffling or discarding shelved snippets changes nothing that renders, and
+   * bumping would re-trigger a screenshot capture (and a websocket refresh) for
+   * an edit no visitor could ever see.
+   */
+  private async saveScratchPad(
+    id: string,
+    orgId: string,
+    fields: { snippets?: any[]; scratchPad: any[] },
+    touchesRender: boolean,
+  ): Promise<Page> {
+    const updateData: any = { scratchPad: fields.scratchPad };
+    if (fields.snippets !== undefined) updateData.snippets = fields.snippets;
+    if (touchesRender) updateData.contentUpdatedAt = new Date();
+
+    const updated = await this.pageModel
+      .findOneAndUpdate({ _id: id, org: orgId }, { $set: updateData }, { new: true })
+      .exec();
+    if (!updated) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+
+    if (touchesRender) {
+      await this.pubsub.publish('page-updates', { action: 'updated', roomId: id });
+    }
+    return updated;
+  }
+
+  /** Move a snippet off the page and onto the scratch pad. */
+  async parkSnippet(id: string, orgId: string, index: number): Promise<Page> {
+    const page = await this.loadForScratchPad(id, orgId);
+    const snippets = [...((page.snippets as any[]) || [])];
+    const scratchPad = [...((page.scratchPad as any[]) || [])];
+
+    if (!isValidIndex(index, snippets.length)) {
+      throw new BadRequestException(
+        `No snippet at position ${index} on this page.`,
+      );
+    }
+    if (scratchPad.length >= SCRATCH_PAD_LIMIT) {
+      throw new BadRequestException(SCRATCH_PAD_FULL_MESSAGE);
+    }
+
+    // splice returns the stored abstract whole, overrides included — this is
+    // the move that has to stay lossless.
+    const [moved] = snippets.splice(index, 1);
+    scratchPad.push(moved);
+
+    return this.saveScratchPad(id, orgId, { snippets, scratchPad }, true);
+  }
+
+  /** Move a snippet off the scratch pad and back onto the page. */
+  async restoreSnippet(
+    id: string,
+    orgId: string,
+    scratchIndex: number,
+    toIndex?: number,
+  ): Promise<Page> {
+    const page = await this.loadForScratchPad(id, orgId);
+    const snippets = [...((page.snippets as any[]) || [])];
+    const scratchPad = [...((page.scratchPad as any[]) || [])];
+
+    if (!isValidIndex(scratchIndex, scratchPad.length)) {
+      throw new BadRequestException(
+        `No snippet at position ${scratchIndex} on the scratch pad.`,
+      );
+    }
+
+    const [moved] = scratchPad.splice(scratchIndex, 1);
+    snippets.splice(clampInsertIndex(toIndex, snippets.length), 0, moved);
+
+    return this.saveScratchPad(id, orgId, { snippets, scratchPad }, true);
+  }
+
+  /** Reorder within the scratch pad. Changes nothing that renders. */
+  async reorderScratchPad(
+    id: string,
+    orgId: string,
+    from: number,
+    to: number,
+  ): Promise<Page> {
+    const page = await this.loadForScratchPad(id, orgId);
+    const scratchPad = [...((page.scratchPad as any[]) || [])];
+
+    if (!isValidIndex(from, scratchPad.length)) {
+      throw new BadRequestException(
+        `No snippet at position ${from} on the scratch pad.`,
+      );
+    }
+    const [moved] = scratchPad.splice(from, 1);
+    scratchPad.splice(clampInsertIndex(to, scratchPad.length), 0, moved);
+
+    return this.saveScratchPad(id, orgId, { scratchPad }, false);
+  }
+
+  /**
+   * Discard a parked snippet.
+   *
+   * This is the one destructive scratch pad operation: the abstract and its
+   * customizations go with it, and there is nowhere to recover them from. The
+   * editor confirms before calling it.
+   */
+  async discardScratchSnippet(
+    id: string,
+    orgId: string,
+    scratchIndex: number,
+  ): Promise<Page> {
+    const page = await this.loadForScratchPad(id, orgId);
+    const scratchPad = [...((page.scratchPad as any[]) || [])];
+
+    if (!isValidIndex(scratchIndex, scratchPad.length)) {
+      throw new BadRequestException(
+        `No snippet at position ${scratchIndex} on the scratch pad.`,
+      );
+    }
+    scratchPad.splice(scratchIndex, 1);
+
+    return this.saveScratchPad(id, orgId, { scratchPad }, false);
   }
 
   /**
@@ -601,6 +752,12 @@ export class PagesService {
   // real assets themselves before publishing, so this is the id list they need.
   // Deduped by shutterstockId (a comp reused across snippets is licensed once),
   // with a usage count.
+  //
+  // `page.scratchPad` is deliberately NOT walked. A parked snippet is not on
+  // the page and will not be in the exported site, so listing its images would
+  // bill the customer for photos they cannot see. If you are here because an
+  // image seems to be missing from the hand-off, check whether it is parked
+  // before adding the array to this walk. There is a test for this.
   async getLicensing(
     id: string,
     orgId: string,

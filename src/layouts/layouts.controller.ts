@@ -25,6 +25,14 @@ import { UpdateLayoutDto } from './dto/update-layout.dto';
 import { CustomizeImagesDto } from '../pages/dto/customize-images.dto';
 import { CustomizeDto } from '../pages/dto/customize.dto';
 import { JwtAuthGuard } from '../auth/jwt.strategy';
+import {
+  LayoutParkSnippetDto,
+  LayoutRestoreSnippetDto,
+  ReorderScratchPadDto,
+  requireIndex,
+  optionalIndex,
+} from '../pages/dto/scratch-pad.dto';
+import { SCRATCH_PAD_LIMIT } from '../common/scratch-pad';
 
 @Controller('layouts')
 export class LayoutsController {
@@ -131,6 +139,83 @@ export class LayoutsController {
       replaceExisting: dto?.replaceExisting,
       onlyMissing: dto?.onlyMissing,
     });
+  }
+
+  // --- Scratch pad ---------------------------------------------------------
+  //
+  // Layout-wide, so `subPageIndex` says which subpage a snippet comes from on
+  // park and which it lands on when restored. As on pages, only indexes cross
+  // the wire — the server moves its own stored snippet so customizations
+  // cannot be lost in transit.
+
+  @UseGuards(JwtAuthGuard)
+  @Get(':id/scratch-pad')
+  async getScratchPad(@Param('id') id: string, @Request() req) {
+    const layout = await this.layoutsService.findOne(id, req.user.activeOrg);
+    if (!layout) {
+      throw new NotFoundException(`Layout with id ${id} not found`);
+    }
+    return { scratchPad: layout.scratchPad || [], limit: SCRATCH_PAD_LIMIT };
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/scratch-pad/park')
+  async parkSnippet(
+    @Param('id') id: string,
+    @Body() dto: LayoutParkSnippetDto,
+    @Request() req,
+  ): Promise<Layout> {
+    return this.layoutsService.parkSnippet(
+      id,
+      req.user.activeOrg,
+      requireIndex(dto?.subPageIndex, 'subPageIndex'),
+      requireIndex(dto?.index, 'index'),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/scratch-pad/restore')
+  async restoreSnippet(
+    @Param('id') id: string,
+    @Body() dto: LayoutRestoreSnippetDto,
+    @Request() req,
+  ): Promise<Layout> {
+    return this.layoutsService.restoreSnippet(
+      id,
+      req.user.activeOrg,
+      requireIndex(dto?.scratchIndex, 'scratchIndex'),
+      requireIndex(dto?.subPageIndex, 'subPageIndex'),
+      optionalIndex(dto?.toIndex, 'toIndex'),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post(':id/scratch-pad/reorder')
+  async reorderScratchPad(
+    @Param('id') id: string,
+    @Body() dto: ReorderScratchPadDto,
+    @Request() req,
+  ): Promise<Layout> {
+    return this.layoutsService.reorderScratchPad(
+      id,
+      req.user.activeOrg,
+      requireIndex(dto?.from, 'from'),
+      requireIndex(dto?.to, 'to'),
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete(':id/scratch-pad/:scratchIndex')
+  async discardScratchSnippet(
+    @Param('id') id: string,
+    @Param('scratchIndex') scratchIndex: string,
+    @Request() req,
+  ): Promise<Layout> {
+    return this.layoutsService.discardScratchSnippet(
+      id,
+      req.user.activeOrg,
+      requireIndex(Number(scratchIndex), 'scratchIndex'),
+    );
   }
 
   // Shutterstock images the user must license before publishing the download.

@@ -23,6 +23,12 @@ import { ShutterstockService } from '../shutterstock';
 import { targetAspectFor, slotShapeFor } from '../shutterstock/target-dimensions';
 import { wrapAffiliate, imagePageUrl } from '../shutterstock/affiliate';
 import { validateSlug } from '../common/slug-rules';
+import {
+  SCRATCH_PAD_LIMIT,
+  SCRATCH_PAD_FULL_MESSAGE,
+  isValidIndex,
+  clampInsertIndex,
+} from '../common/scratch-pad';
 import { assertSlugAvailable } from '../common/slug-conflict';
 
 /**
@@ -650,8 +656,172 @@ export class LayoutsService {
 
   private readonly viewUrl = process.env.VIEW_URL || 'http://localhost:3100';
 
+  // ---------------------------------------------------------------------
+  // Scratch pad
+  //
+  // Layout-wide rather than per-subpage, so a snippet parked from Home can be
+  // restored onto About — the main thing the shelf buys on a layout.
+  //
+  // As on pages, moves happen server-side and the editor sends only indexes:
+  // it does not hold the subpage-scoped customizations (text overrides, image
+  // replacements, shutterstockId), so a client-driven move would silently
+  // strip them.
+  // ---------------------------------------------------------------------
+
+  private async loadForScratchPad(id: string, orgId: string): Promise<Layout> {
+    const layout = await this.findOne(id, orgId);
+    if (!layout) {
+      throw new NotFoundException(`Layout with id ${id} not found`);
+    }
+    return layout;
+  }
+
+  /**
+   * Persist a scratch pad move.
+   *
+   * `touchesRender` keeps shelf-only operations from bumping contentUpdatedAt,
+   * which would otherwise queue a fresh screenshot for a change that alters
+   * nothing a visitor sees.
+   */
+  private async saveScratchPad(
+    id: string,
+    orgId: string,
+    fields: { subPages?: any[]; scratchPad: any[] },
+    touchesRender: boolean,
+  ): Promise<Layout> {
+    const updateData: any = { scratchPad: fields.scratchPad };
+    if (fields.subPages !== undefined) updateData.subPages = fields.subPages;
+    if (touchesRender) updateData.contentUpdatedAt = new Date();
+
+    const updated = await this.layoutModel
+      .findOneAndUpdate({ _id: id, org: orgId }, { $set: updateData }, { new: true })
+      .exec();
+    if (!updated) {
+      throw new NotFoundException(`Layout with id ${id} not found`);
+    }
+    return updated;
+  }
+
+  /** Move a snippet off a subpage and onto the layout's scratch pad. */
+  async parkSnippet(
+    id: string,
+    orgId: string,
+    subPageIndex: number,
+    index: number,
+  ): Promise<Layout> {
+    const layout = await this.loadForScratchPad(id, orgId);
+    const subPages = [...((layout.subPages as any[]) || [])];
+    const scratchPad = [...((layout.scratchPad as any[]) || [])];
+
+    if (!isValidIndex(subPageIndex, subPages.length)) {
+      throw new BadRequestException(
+        `No subpage at position ${subPageIndex} on this layout.`,
+      );
+    }
+    const snippets = [...(subPages[subPageIndex]?.snippets || [])];
+    if (!isValidIndex(index, snippets.length)) {
+      throw new BadRequestException(
+        `No snippet at position ${index} on that subpage.`,
+      );
+    }
+    if (scratchPad.length >= SCRATCH_PAD_LIMIT) {
+      throw new BadRequestException(SCRATCH_PAD_FULL_MESSAGE);
+    }
+
+    const [moved] = snippets.splice(index, 1);
+    scratchPad.push(moved);
+    // Mongoose subdocuments are not plain objects; rebuild the entry so the
+    // $set writes a clean subpage rather than a half-hydrated document.
+    subPages[subPageIndex] = {
+      ...(subPages[subPageIndex]?.toObject?.() ?? subPages[subPageIndex]),
+      snippets,
+    };
+
+    return this.saveScratchPad(id, orgId, { subPages, scratchPad }, true);
+  }
+
+  /** Move a snippet off the scratch pad and onto a subpage. */
+  async restoreSnippet(
+    id: string,
+    orgId: string,
+    scratchIndex: number,
+    subPageIndex: number,
+    toIndex?: number,
+  ): Promise<Layout> {
+    const layout = await this.loadForScratchPad(id, orgId);
+    const subPages = [...((layout.subPages as any[]) || [])];
+    const scratchPad = [...((layout.scratchPad as any[]) || [])];
+
+    if (!isValidIndex(scratchIndex, scratchPad.length)) {
+      throw new BadRequestException(
+        `No snippet at position ${scratchIndex} on the scratch pad.`,
+      );
+    }
+    if (!isValidIndex(subPageIndex, subPages.length)) {
+      throw new BadRequestException(
+        `No subpage at position ${subPageIndex} on this layout.`,
+      );
+    }
+
+    const snippets = [...(subPages[subPageIndex]?.snippets || [])];
+    const [moved] = scratchPad.splice(scratchIndex, 1);
+    snippets.splice(clampInsertIndex(toIndex, snippets.length), 0, moved);
+    subPages[subPageIndex] = {
+      ...(subPages[subPageIndex]?.toObject?.() ?? subPages[subPageIndex]),
+      snippets,
+    };
+
+    return this.saveScratchPad(id, orgId, { subPages, scratchPad }, true);
+  }
+
+  /** Reorder within the scratch pad. Changes nothing that renders. */
+  async reorderScratchPad(
+    id: string,
+    orgId: string,
+    from: number,
+    to: number,
+  ): Promise<Layout> {
+    const layout = await this.loadForScratchPad(id, orgId);
+    const scratchPad = [...((layout.scratchPad as any[]) || [])];
+
+    if (!isValidIndex(from, scratchPad.length)) {
+      throw new BadRequestException(
+        `No snippet at position ${from} on the scratch pad.`,
+      );
+    }
+    const [moved] = scratchPad.splice(from, 1);
+    scratchPad.splice(clampInsertIndex(to, scratchPad.length), 0, moved);
+
+    return this.saveScratchPad(id, orgId, { scratchPad }, false);
+  }
+
+  /** Discard a parked snippet. Destructive — its customizations go with it. */
+  async discardScratchSnippet(
+    id: string,
+    orgId: string,
+    scratchIndex: number,
+  ): Promise<Layout> {
+    const layout = await this.loadForScratchPad(id, orgId);
+    const scratchPad = [...((layout.scratchPad as any[]) || [])];
+
+    if (!isValidIndex(scratchIndex, scratchPad.length)) {
+      throw new BadRequestException(
+        `No snippet at position ${scratchIndex} on the scratch pad.`,
+      );
+    }
+    scratchPad.splice(scratchIndex, 1);
+
+    return this.saveScratchPad(id, orgId, { scratchPad }, false);
+  }
+
   // Shutterstock images used across the layout (nav, footer, and every subpage
   // snippet), for the finalize licensing hand-off. Deduped by shutterstockId.
+  //
+  // `layout.scratchPad` is deliberately NOT walked here. A parked snippet is
+  // not on the layout, so its images are not in what the customer ships, and
+  // listing them would tell them to license photos they cannot see. If you are
+  // here because an image seems to be missing from the hand-off, check whether
+  // it is parked before adding the array to this walk.
   async getLicensing(
     id: string,
     orgId: string,

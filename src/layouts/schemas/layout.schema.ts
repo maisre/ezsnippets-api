@@ -10,6 +10,15 @@ export const LayoutSchema = new mongoose.Schema(
     nav: { type: Object, required: false },
     footer: { type: Object, required: false },
     subPages: Array<SubPage>,
+    // Editor scratch pad, layout-wide rather than per-subpage: parking a hero
+    // off Home and dropping it on About is the main thing this buys. Same type
+    // as a subpage's `snippets`, so a park or restore is an array move and
+    // overrides survive intact.
+    //
+    // Capped at SCRATCH_PAD_LIMIT, and excluded from getLicensing() and the
+    // .zip export: a parked snippet is not on the layout. See
+    // common/scratch-pad.
+    scratchPad: { type: Array<SnippetAbstract>, default: [] },
     // Archived layouts are parked: they stop counting toward the org's plan
     // limit but stay listed in the dashboard and can be restored (which
     // re-checks the limit).

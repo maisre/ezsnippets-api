@@ -10,6 +10,8 @@ export interface Page extends Document {
   readonly deletedAt?: Date | null;
 
   readonly snippets: SnippetAbstract[];
+  /** Parked snippets — see common/scratch-pad.ts. Never licensed or exported. */
+  readonly scratchPad?: SnippetAbstract[];
   readonly org: Types.ObjectId;
   readonly createdBy?: Types.ObjectId;
 

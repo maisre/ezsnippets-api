@@ -1,5 +1,19 @@
 import * as mongoose from 'mongoose';
 
+// A starred library snippet. `_id` is off because the entry is already keyed by
+// snippetId — an extra ObjectId per row would be one more field the editor has
+// to ignore, and one more thing to accidentally start treating as the key.
+const FavoriteSnippetSchema = new mongoose.Schema(
+  {
+    snippetId: { type: String, required: true },
+    // Who starred it. In a shared Agency workspace "who added this?" is the
+    // first question asked about someone else's shortlist entry.
+    createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'user' },
+    addedAt: { type: Date, default: Date.now },
+  },
+  { _id: false },
+);
+
 export const OrgSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
@@ -47,6 +61,11 @@ export const OrgSchema = new mongoose.Schema(
         occurredAt: { type: Date },
       },
     ],
+    // Snippet ids the org has starred in the editor palette. Ids only — see
+    // favorites.ts for why. Unlike billingEvents this stays in the API
+    // response: the palette reads it straight off the org the client already
+    // holds, rather than paying for a second round trip to render a star.
+    favoriteSnippets: [FavoriteSnippetSchema],
   },
   {
     toJSON: {

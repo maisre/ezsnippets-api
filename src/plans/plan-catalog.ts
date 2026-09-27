@@ -32,6 +32,13 @@ export interface PlanTier {
   features: string[];
   featured: boolean;
   cta: string;
+  /**
+   * The tier an owner's *personal* org is entitled to while this tier's team
+   * org is active. Agency owners get a private Pro workspace for side projects
+   * they'd rather keep off the team — derived at request time, never stored,
+   * so it lapses with the team subscription. See PlansService.entitlementFor.
+   */
+  ownerPersonalTier?: TierName;
 }
 
 /**
@@ -44,7 +51,8 @@ export interface PlanTier {
  * several projects are live at once, which is the upgrade trigger. Pro adds the
  * custom preview domain — the "don't show my client your brand" purchase, priced
  * at the step most customers actually take rather than reserved for the top
- * tier. Agency sells seats.
+ * tier. Agency sells seats: it's the only multi-seat tier, and buying it is what
+ * creates a team org (maxSeats > 1 is the test, not the tier name).
  *
  * `features` deliberately lists only what is built and shipped. Copy for
  * templates, saved themes, shared team libraries, and the static-site export
@@ -77,7 +85,7 @@ export const PLAN_TIERS: PlanTier[] = [
     limits: {
       maxPages: 150,
       maxLayouts: 10,
-      maxSeats: 2,
+      maxSeats: 1,
       maxCustomDomains: 1,
       maxSavedTemplates: -1,
       aiDailyLimit: 300,
@@ -98,9 +106,14 @@ export const PLAN_TIERS: PlanTier[] = [
       aiDailyLimit: 1000,
     },
     description: 'For studios with a team.',
-    features: ['Everything in Pro', 'Team workspace'],
+    features: [
+      'Everything in Pro',
+      'Team workspace',
+      'Includes a private Pro workspace for the owner',
+    ],
     featured: false,
     cta: 'Get Started',
+    ownerPersonalTier: 'Pro',
   },
 ];
 

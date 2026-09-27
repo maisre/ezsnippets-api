@@ -70,6 +70,24 @@ export class AppController {
     res.cookie(SESSION_COOKIE, token, sessionCookieOptions());
   }
 
+  // Returns a token scoped to the new workspace and re-sets the editor cookie
+  // to match; the old token stays valid only for as long as the user remains a
+  // member of the org it names.
+  @UseGuards(JwtAuthGuard)
+  @Post('auth/switch-org')
+  async switchOrg(
+    @Request() req,
+    @Body() body: { orgId?: string },
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const token = await this.authService.switchOrg(
+      req.user.userId,
+      String(body?.orgId ?? ''),
+    );
+    res.cookie(SESSION_COOKIE, token, sessionCookieOptions());
+    return { access_token: token };
+  }
+
   @Post('auth/logout')
   @HttpCode(204)
   logout(@Res({ passthrough: true }) res: Response) {

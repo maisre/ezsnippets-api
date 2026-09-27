@@ -1,7 +1,6 @@
 import { Controller, Get, Request, UseGuards } from '@nestjs/common';
 import { PlansService } from './plans.service';
 import { PaddleCatalogService } from './paddle-catalog.service';
-import { hasActiveSubscription } from './subscription-status';
 import { OrgsService } from '../orgs/orgs.service';
 import { PagesService } from '../pages/pages.service';
 import { LayoutsService } from '../layouts/layouts.service';
@@ -44,7 +43,8 @@ export class PlansController {
     // Retain, and a lapsed customer is exactly who Retain wants to win back.
     const paddleCustomerId = org?.paddleCustomerId ?? null;
 
-    if (!hasActiveSubscription(org)) {
+    const entitlement = await this.plansService.entitlementFor(org);
+    if (!org || !entitlement) {
       return {
         hasPlan: false,
         plan: null,
@@ -62,12 +62,16 @@ export class PlansController {
 
     return {
       hasPlan: true,
-      plan: this.plansService.planName(org.productId),
-      limits: this.plansService.getLimits(org.productId),
+      plan: entitlement.plan,
+      limits: entitlement.limits,
+      // 'team-owner' = this personal org's plan is included with a team
+      // subscription; the account page says so instead of offering billing.
+      planSource: entitlement.source,
       usage: {
         pages: pageCount,
         layouts: layoutCount,
         domains: domainCount,
+        seats: org.members.length,
       },
       paddleCustomerId,
     };

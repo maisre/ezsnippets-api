@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import * as Sentry from '@sentry/nestjs';
 import { PADDLE_ENV } from '../paddle/paddle.module';
 import type { PaddleEnv } from './plan-catalog';
@@ -9,6 +9,23 @@ import {
   PlanTier,
   tierForProduct,
 } from './plan-catalog';
+import { hasActiveSubscription } from './subscription-status';
+import { OrgsService } from '../orgs/orgs.service';
+import type { Org } from '../orgs/interfaces/org.interface';
+
+/** What an org may do right now, and why. */
+export interface Entitlement {
+  /** Tier name, for display. */
+  plan: string;
+  limits: PlanLimits;
+  /**
+   * `subscription` — the org pays for itself (or was comped).
+   * `team-owner` — a personal org riding on its owner's team subscription
+   * (PlanTier.ownerPersonalTier); `viaOrgId` names the team org.
+   */
+  source: 'subscription' | 'team-owner';
+  viaOrgId?: string;
+}
 
 @Injectable()
 export class PlansService {
@@ -18,7 +35,51 @@ export class PlansService {
     @Inject('PLAN_LIMITS_OVERRIDE')
     private readonly limitsOverride: string | undefined,
     @Inject(PADDLE_ENV) private readonly paddleEnv: PaddleEnv,
+    // Optional so the pure limit/tier logic can be unit-tested without a
+    // database; only entitlementFor needs it.
+    @Optional() private readonly orgsService?: OrgsService,
   ) {}
+
+  /**
+   * The single answer to "may this org create things, and within what?".
+   * Null means no active plan.
+   *
+   * An org's own subscription always wins. Failing that, a personal org whose
+   * owner owns an active team org inherits that team tier's ownerPersonalTier
+   * — the Agency owner's included Pro workspace. Nothing is written for that
+   * case, so it can't drift: cancel the Agency and the personal org lapses on
+   * the very next request.
+   */
+  async entitlementFor(org: Org | null | undefined): Promise<Entitlement | null> {
+    if (!org) return null;
+
+    if (hasActiveSubscription(org)) {
+      return {
+        plan: this.planName(org.productId),
+        limits: this.getLimits(org.productId),
+        source: 'subscription',
+      };
+    }
+
+    if (!org.personal || !this.orgsService) return null;
+    const owner = org.members.find((m) => m.role === 'owner');
+    if (!owner) return null;
+
+    const teams = await this.orgsService.findTeamOrgsOwnedBy(String(owner.user));
+    for (const team of teams) {
+      if (!hasActiveSubscription(team)) continue;
+      const personalTier = this.findTier(team.productId)?.ownerPersonalTier;
+      const tier = personalTier && PLAN_TIERS.find((t) => t.name === personalTier);
+      if (!tier) continue;
+      return {
+        plan: tier.name,
+        limits: this.parseOverride() ?? tier.limits,
+        source: 'team-owner',
+        viaOrgId: String(team._id),
+      };
+    }
+    return null;
+  }
 
   findAll(): PlanTier[] {
     return PLAN_TIERS;

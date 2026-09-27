@@ -134,3 +134,68 @@ describe('pickPlanRef', () => {
     });
   });
 });
+
+describe('PlansService.entitlementFor', () => {
+  const SANDBOX_AGENCY = PRODUCT_IDS.sandbox.Agency;
+  const OWNER = '6ab8789d41a2c961f4f80128';
+
+  const personal = (overrides: any = {}) => ({
+    personal: true,
+    members: [{ user: OWNER, role: 'owner' }],
+    ...overrides,
+  });
+  const team = (overrides: any = {}) => ({
+    _id: 'team1',
+    personal: false,
+    plan: 'pri_agency',
+    productId: SANDBOX_AGENCY,
+    subscriptionStatus: 'active',
+    members: [{ user: OWNER, role: 'owner' }],
+    ...overrides,
+  });
+
+  function build(teams: any[]) {
+    const orgsService: any = { findTeamOrgsOwnedBy: jest.fn(async () => teams) };
+    return {
+      service: new PlansService(undefined, 'sandbox', orgsService),
+      orgsService,
+    };
+  }
+
+  it("uses the org's own subscription first, without looking at teams", async () => {
+    const { service, orgsService } = build([team()]);
+    const e = await service.entitlementFor(
+      personal({ plan: 'pri_pro', productId: SANDBOX_PRO, subscriptionStatus: 'active' }),
+    );
+    expect(e).toMatchObject({ plan: 'Pro', source: 'subscription' });
+    expect(orgsService.findTeamOrgsOwnedBy).not.toHaveBeenCalled();
+  });
+
+  it("gives an Agency owner's personal org Pro, derived from the team", async () => {
+    const { service } = build([team()]);
+    const e = await service.entitlementFor(personal());
+    expect(e).toMatchObject({ plan: 'Pro', source: 'team-owner', viaOrgId: 'team1' });
+    expect(e?.limits.maxSeats).toBe(1);
+  });
+
+  it('lapses with the team subscription', async () => {
+    const { service } = build([team({ subscriptionStatus: 'canceled' })]);
+    expect(await service.entitlementFor(personal())).toBeNull();
+  });
+
+  it('is revoked by a chargeback on the team', async () => {
+    const { service } = build([team({ billingBlocked: true })]);
+    expect(await service.entitlementFor(personal())).toBeNull();
+  });
+
+  it('never flows to a team org, only to a personal one', async () => {
+    const { service, orgsService } = build([team()]);
+    expect(await service.entitlementFor(team({ plan: undefined, productId: undefined }))).toBeNull();
+    expect(orgsService.findTeamOrgsOwnedBy).not.toHaveBeenCalled();
+  });
+
+  it('ignores a team on a tier with no included personal plan', async () => {
+    const { service } = build([team({ productId: SANDBOX_PRO })]);
+    expect(await service.entitlementFor(personal())).toBeNull();
+  });
+});

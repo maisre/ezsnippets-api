@@ -2,6 +2,7 @@ import {
   Inject,
   Injectable,
   ConflictException,
+  ForbiddenException,
   BadRequestException,
   UnauthorizedException,
   Logger,
@@ -79,15 +80,47 @@ export class AuthService {
   }
 
   async login(user: any) {
+    const activeOrg = await this.resolveActiveOrg(
+      String(user._doc._id),
+      user._doc.activeOrg,
+    );
     const payload = {
       email: user._doc.email,
       sub: user._doc._id,
-      activeOrg: user._doc.activeOrg,
+      activeOrg,
       tokenVersion: user._doc.tokenVersion,
     };
     return {
       access_token: this.jwtService.sign(payload),
     };
+  }
+
+  /**
+   * The org to mint a token for. JwtStrategy rejects any token whose activeOrg
+   * the user isn't a member of, so minting one from a stale user.activeOrg
+   * (removed from a team, org gone) would lock them out on every login. Fall
+   * back to — and persist — their personal org instead.
+   */
+  private async resolveActiveOrg(
+    userId: string,
+    activeOrg: unknown,
+  ): Promise<string | undefined> {
+    if (activeOrg && (await this.orgsService.isUserMember(String(activeOrg), userId))) {
+      return String(activeOrg);
+    }
+    const personal = await this.orgsService.findPersonalOrg(userId);
+    if (!personal) return activeOrg ? String(activeOrg) : undefined;
+    await this.usersService.updateActiveOrg(userId, String(personal._id));
+    return String(personal._id);
+  }
+
+  /** Make `orgId` the user's workspace and mint a token scoped to it. */
+  async switchOrg(userId: string, orgId: string): Promise<string> {
+    if (!(await this.orgsService.isUserMember(orgId, userId))) {
+      throw new ForbiddenException('You are not a member of that workspace');
+    }
+    await this.usersService.updateActiveOrg(userId, orgId);
+    return this.issueSessionToken(userId);
   }
 
   // Re-mint a session JWT for an already-authenticated user. Backs the
@@ -103,7 +136,7 @@ export class AuthService {
     const payload = {
       email: user.email,
       sub: String(user._id),
-      activeOrg: user.activeOrg,
+      activeOrg: await this.resolveActiveOrg(String(user._id), user.activeOrg),
       tokenVersion: user.tokenVersion,
     };
     return this.jwtService.sign(payload);

@@ -11,6 +11,7 @@ import { PaymentsModule } from './payments/payments.module';
 import { LayoutsModule } from './layouts/layouts.module';
 import { RedisModule } from './redis/redis.module';
 import { OrgsModule } from './orgs/orgs.module';
+import { TeamsModule } from './teams/teams.module';
 import { PlansModule } from './plans/plans.module';
 import { SqsModule } from './sqs/sqs.module';
 import { UploadsModule } from './uploads/uploads.module';
@@ -29,6 +30,7 @@ import { DomainsModule } from './domains/domains.module';
     PaymentsModule.forRootAsync(),
     LayoutsModule,
     OrgsModule,
+    TeamsModule,
     PlansModule,
     UploadsModule,
     TemplatesModule,

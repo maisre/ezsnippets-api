@@ -10,6 +10,19 @@ export class UsersService {
     return this.userModel.findOne({ email }).exec();
   }
 
+  // Signup stores email as typed, but invites are keyed lower-cased.
+  async findByEmailInsensitive(email: string): Promise<User | null> {
+    const escaped = email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return this.userModel
+      .findOne({ email: { $regex: `^${escaped}$`, $options: 'i' } })
+      .exec();
+  }
+
+  async findByIds(userIds: string[]): Promise<User[]> {
+    const ids = userIds.filter((id) => Types.ObjectId.isValid(id));
+    return this.userModel.find({ _id: { $in: ids } }).select('email').exec();
+  }
+
   async create(email: string, hashedPassword: string): Promise<User> {
     const user = new this.userModel({ email, password: hashedPassword });
     return user.save();

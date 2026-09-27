@@ -81,3 +81,7 @@ export const OrgSchema = new mongoose.Schema(
     },
   },
 );
+
+// "Which orgs is this user in?" — GET /orgs, and the membership check that
+// JwtStrategy runs on every authenticated request.
+OrgSchema.index({ 'members.user': 1 });

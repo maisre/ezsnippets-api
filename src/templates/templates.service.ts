@@ -13,7 +13,6 @@ import { UpdateTemplateDto } from './dto/update-template.dto';
 import { SnippetsService } from '../snippets/snippets.service';
 import { OrgsService } from '../orgs/orgs.service';
 import { PlansService } from '../plans/plans.service';
-import { hasActiveSubscription } from '../plans/subscription-status';
 
 /** Library templates (no org) plus the org's own. Mirrors SnippetsService. */
 function visibleTo(orgId?: string) {
@@ -228,13 +227,14 @@ export class TemplatesService {
 
   private async enforceLimit(orgId: string): Promise<void> {
     const org = await this.orgsService.findOne(orgId);
-    if (!hasActiveSubscription(org)) {
+    const entitlement = await this.plansService.entitlementFor(org);
+    if (!entitlement) {
       throw new ForbiddenException(
         'No active plan. Subscribe to a plan to save templates.',
       );
     }
 
-    const { maxSavedTemplates } = this.plansService.getLimits(org.productId);
+    const { maxSavedTemplates } = entitlement.limits;
     if (maxSavedTemplates === -1) return; // Unlimited
 
     if (maxSavedTemplates === 0) {

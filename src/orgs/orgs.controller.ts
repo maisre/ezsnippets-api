@@ -11,16 +11,41 @@ import {
 } from '@nestjs/common';
 import { OrgsService } from './orgs.service';
 import { JwtAuthGuard } from '../auth/jwt.strategy';
-import { FavoriteSnippet, Org } from './interfaces/org.interface';
+import { FavoriteSnippet } from './interfaces/org.interface';
+
+const OWNER_ONLY_FIELDS = [
+  'paddleCustomerId',
+  'cardBrand',
+  'cardLast4',
+  'cardExpMonth',
+  'cardExpYear',
+];
 
 @Controller('orgs')
 export class OrgsController {
   constructor(private readonly orgsService: OrgsService) {}
 
+  // Every workspace the caller belongs to, each tagged with their `role` in it
+  // and `active` for the one their token is scoped to. Billing fields are
+  // owner-only: a team member has no business seeing the owner's card.
   @UseGuards(JwtAuthGuard)
   @Get()
-  async findAll(@Request() req): Promise<Org[]> {
-    return this.orgsService.findOrgsForUser(req.user.userId);
+  async findAll(@Request() req): Promise<Record<string, unknown>[]> {
+    const orgs = await this.orgsService.findOrgsForUser(req.user.userId);
+    return orgs.map((org) => {
+      const json = org.toJSON() as Record<string, unknown>;
+      const role = org.members.find(
+        (m) => String(m.user) === req.user.userId,
+      )?.role;
+      if (role !== 'owner') {
+        for (const field of OWNER_ONLY_FIELDS) delete json[field];
+      }
+      return {
+        ...json,
+        role,
+        active: String(org._id) === String(req.user.activeOrg),
+      };
+    });
   }
 
   // Favorites hang off the caller's active org, the same way pages and layouts

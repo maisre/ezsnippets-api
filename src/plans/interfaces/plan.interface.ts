@@ -12,7 +12,10 @@ export interface PlanLimits {
   maxPages: number;
   /** Concurrent (non-archived) layouts — effectively "client sites in flight". */
   maxLayouts: number;
-  /** Members allowed on the org. Declared but not yet enforced — no invite flow. */
+  /**
+   * Members allowed on the org, counting pending invites. Anything above 1
+   * makes the tier a team tier: checkout creates a separate team org for it.
+   */
   maxSeats: number;
   /**
    * Custom preview domains (e.g. view.theirstudio.com instead of

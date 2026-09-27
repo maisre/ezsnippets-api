@@ -37,6 +37,11 @@ function build(opts: { limits?: any; known?: string[] } = {}) {
   };
   const plansService: any = {
     getLimits: () => opts.limits ?? { maxSavedTemplates: -1 },
+    entitlementFor: async () => ({
+      plan: 'Pro',
+      limits: opts.limits ?? { maxSavedTemplates: -1 },
+      source: 'subscription',
+    }),
   };
 
   const service = new TemplatesService(

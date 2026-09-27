@@ -46,7 +46,10 @@ function buildService(opts: {
   const orgsService: any = {
     findOne: jest.fn().mockResolvedValue({ productId: 'prd_test' }),
   };
-  const plansService: any = { getLimits: () => ({ aiDailyLimit: 1000 }) };
+  const plansService: any = {
+    getLimits: () => ({ aiDailyLimit: 1000 }),
+    entitlementFor: async () => null,
+  };
 
   const service = new PagesService(
     pageModel,

@@ -14,7 +14,6 @@ import { CustomDomain } from './interfaces/custom-domain.interface';
 import { normalizeHostname, validateHostname } from './hostname-rules';
 import { OrgsService } from '../orgs/orgs.service';
 import { PlansService } from '../plans/plans.service';
-import { hasActiveSubscription } from '../plans/subscription-status';
 
 /**
  * How many consecutive failed checks flip a live domain to `failed`. A single
@@ -386,8 +385,8 @@ export class DomainsService {
   /** Does this org currently pay for custom domains at all? */
   async isEntitled(orgId: string): Promise<boolean> {
     const org = await this.orgsService.findOne(orgId);
-    if (!hasActiveSubscription(org)) return false;
-    return this.plansService.getLimits(org.productId).maxCustomDomains !== 0;
+    const entitlement = await this.plansService.entitlementFor(org);
+    return !!entitlement && entitlement.limits.maxCustomDomains !== 0;
   }
 
   /**
@@ -396,13 +395,14 @@ export class DomainsService {
    */
   private async enforceLimit(orgId: string): Promise<void> {
     const org = await this.orgsService.findOne(orgId);
-    if (!hasActiveSubscription(org)) {
+    const entitlement = await this.plansService.entitlementFor(org);
+    if (!entitlement) {
       throw new ForbiddenException(
         'No active plan. Subscribe to a plan to connect a custom domain.',
       );
     }
 
-    const limits = this.plansService.getLimits(org.productId);
+    const { limits } = entitlement;
     if (limits.maxCustomDomains === -1) return; // Unlimited
     if (limits.maxCustomDomains === 0) {
       throw new ForbiddenException(

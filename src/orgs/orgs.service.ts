@@ -26,6 +26,124 @@ export class OrgsService {
     return org.save();
   }
 
+  /**
+   * A non-personal org, created at checkout before the customer pays so its id
+   * can ride in Paddle's customData. Carries the owner's Paddle customer id
+   * when they already have one, so Paddle sees one customer, not two.
+   */
+  async createTeamOrg(
+    userId: string,
+    name: string,
+    paddleCustomerId?: string,
+  ): Promise<Org> {
+    const org = new this.orgModel({
+      name,
+      personal: false,
+      members: [{ user: new Types.ObjectId(userId), role: 'owner' }],
+      ...(paddleCustomerId ? { paddleCustomerId } : {}),
+    });
+    return org.save();
+  }
+
+  async findPersonalOrg(userId: string): Promise<Org | null> {
+    if (!Types.ObjectId.isValid(userId)) return null;
+    return this.orgModel
+      .findOne({
+        personal: true,
+        members: { $elemMatch: { user: userId, role: 'owner' } },
+      })
+      .exec();
+  }
+
+  /** Team orgs this user owns, oldest first. */
+  async findTeamOrgsOwnedBy(userId: string): Promise<Org[]> {
+    if (!Types.ObjectId.isValid(userId)) return [];
+    return this.orgModel
+      .find({
+        personal: { $ne: true },
+        members: { $elemMatch: { user: userId, role: 'owner' } },
+      })
+      .sort({ _id: 1 })
+      .exec();
+  }
+
+  async findBySubscriptionId(subscriptionId: string): Promise<Org | null> {
+    return this.orgModel.findOne({ subscriptionId }).exec();
+  }
+
+  async rename(orgId: string, name: string): Promise<Org | null> {
+    return this.orgModel
+      .findByIdAndUpdate(orgId, { name }, { new: true })
+      .exec();
+  }
+
+  async addMember(
+    orgId: string,
+    userId: string,
+    role: OrgMember['role'],
+  ): Promise<Org | null> {
+    // Guarded so accepting the same invite twice can't add a second row.
+    return this.orgModel
+      .findOneAndUpdate(
+        { _id: orgId, 'members.user': { $ne: new Types.ObjectId(userId) } },
+        { $push: { members: { user: new Types.ObjectId(userId), role } } },
+        { new: true },
+      )
+      .exec();
+  }
+
+  async removeMember(orgId: string, userId: string): Promise<Org | null> {
+    return this.orgModel
+      .findByIdAndUpdate(
+        orgId,
+        { $pull: { members: { user: new Types.ObjectId(userId) } } },
+        { new: true },
+      )
+      .exec();
+  }
+
+  async setMemberRole(
+    orgId: string,
+    userId: string,
+    role: OrgMember['role'],
+  ): Promise<Org | null> {
+    return this.orgModel
+      .findOneAndUpdate(
+        { _id: orgId, 'members.user': new Types.ObjectId(userId) },
+        { $set: { 'members.$.role': role } },
+        { new: true },
+      )
+      .exec();
+  }
+
+  /**
+   * Billing fields that follow a subscription when it moves between orgs (the
+   * upgrade to a team tier). paddleCustomerId is deliberately absent — it
+   * identifies the person, and stays on both.
+   */
+  static readonly SUBSCRIPTION_FIELDS = [
+    'subscriptionId',
+    'plan',
+    'productId',
+    'subscriptionStatus',
+    'cardBrand',
+    'cardLast4',
+    'cardExpMonth',
+    'cardExpYear',
+    'currentPeriodEnd',
+    'cancelAtPeriodEnd',
+    'subscriptionEventAt',
+  ] as const;
+
+  async clearSubscription(orgId: string): Promise<Org | null> {
+    const unset = Object.fromEntries(
+      OrgsService.SUBSCRIPTION_FIELDS.map((f) => [f, 1]),
+    );
+    return this.orgModel
+      .findByIdAndUpdate(orgId, { $unset: unset }, { new: true })
+      .exec();
+  }
+
   async findOrgsForUser(userId: string): Promise<Org[]> {
     return this.orgModel.find({ 'members.user': userId }).exec();
   }
@@ -37,12 +155,14 @@ export class OrgsService {
     return this.orgModel.findById(orgId).exec();
   }
 
+  // Runs on every authenticated request (JwtStrategy), so it's an exists()
+  // on the members.user index rather than a full document read.
   async isUserMember(orgId: string, userId: string): Promise<boolean> {
+    if (!Types.ObjectId.isValid(orgId) || !Types.ObjectId.isValid(userId)) {
+      return false;
+    }
     const org = await this.orgModel
-      .findOne({
-        _id: orgId,
-        'members.user': userId,
-      })
+      .exists({ _id: orgId, 'members.user': userId })
       .exec();
     return !!org;
   }
@@ -95,8 +215,33 @@ export class OrgsService {
       .exec();
   }
 
+  /**
+   * Fallback lookup when an event carries no orgId. One person can pay for a
+   * personal org and a team org under the same Paddle customer, so prefer the
+   * org that actually holds a subscription over one that merely remembers the
+   * customer.
+   */
   async findByPaddleCustomerId(customerId: string): Promise<Org | null> {
-    return this.orgModel.findOne({ paddleCustomerId: customerId }).exec();
+    const orgs = await this.orgModel
+      .find({ paddleCustomerId: customerId })
+      .exec();
+    return orgs.find((o) => !!o.subscriptionId) ?? orgs[0] ?? null;
+  }
+
+  /** The card on file belongs to the Paddle customer, i.e. every org they pay for. */
+  async updateCardForCustomer(
+    customerId: string,
+    card: {
+      cardBrand: string | null;
+      cardLast4: string | null;
+      cardExpMonth: number | null;
+      cardExpYear: number | null;
+    },
+  ): Promise<number> {
+    const res = await this.orgModel
+      .updateMany({ paddleCustomerId: customerId }, card)
+      .exec();
+    return res.modifiedCount;
   }
 
   /**

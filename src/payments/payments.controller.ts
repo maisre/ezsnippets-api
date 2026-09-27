@@ -15,6 +15,7 @@ import { JwtAuthGuard } from '../auth/jwt.strategy';
 export class PaymentsController {
   constructor(private readonly paymentService: PaymentsService) {}
 
+  // Bills an org the caller owns — see createCheckoutSession for which one.
   @UseGuards(JwtAuthGuard)
   @Post('checkout')
   async createCheckoutSession(
@@ -22,8 +23,26 @@ export class PaymentsController {
     @Body() body: { priceId: string },
   ) {
     return this.paymentService.createCheckoutSession(
-      req.user.activeOrg,
-      body.priceId,
+      req.user.userId,
+      req.user.email,
+      body?.priceId,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('upgrade/preview')
+  async previewUpgrade(@Request() req, @Body() body: { priceId: string }) {
+    return this.paymentService.previewUpgrade(req.user.userId, body?.priceId);
+  }
+
+  // Moves the caller's personal subscription onto a new team org.
+  @UseGuards(JwtAuthGuard)
+  @Post('upgrade')
+  async upgrade(@Request() req, @Body() body: { priceId: string }) {
+    return this.paymentService.upgradeToTeam(
+      req.user.userId,
+      req.user.email,
+      body?.priceId,
     );
   }
 

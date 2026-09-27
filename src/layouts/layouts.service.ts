@@ -18,7 +18,6 @@ import { TemplatesService } from '../templates/templates.service';
 import { SnippetsService } from '../snippets/snippets.service';
 import { OrgsService } from '../orgs/orgs.service';
 import { PlansService } from '../plans/plans.service';
-import { hasActiveSubscription } from '../plans/subscription-status';
 import { ShutterstockService } from '../shutterstock';
 import { targetAspectFor, slotShapeFor } from '../shutterstock/target-dimensions';
 import { wrapAffiliate, imagePageUrl } from '../shutterstock/affiliate';
@@ -1104,18 +1103,21 @@ export class LayoutsService {
   private async aiLimitFor(orgId: string): Promise<number | undefined> {
     const org = await this.orgsService.findOne(orgId);
     if (!org) return undefined;
-    return this.plansService.getLimits(org.productId).aiDailyLimit;
+    const entitlement = await this.plansService.entitlementFor(org);
+    return (entitlement?.limits ?? this.plansService.getLimits(org.productId))
+      .aiDailyLimit;
   }
 
   private async enforceLimit(orgId: string): Promise<void> {
     const org = await this.orgsService.findOne(orgId);
-    if (!hasActiveSubscription(org)) {
+    const entitlement = await this.plansService.entitlementFor(org);
+    if (!entitlement) {
       throw new ForbiddenException(
         'No active plan. Subscribe to a plan to create layouts.',
       );
     }
 
-    const limits = this.plansService.getLimits(org.productId);
+    const { limits } = entitlement;
     if (limits.maxLayouts === -1) return; // Unlimited
 
     const current = await this.countForOrg(orgId);

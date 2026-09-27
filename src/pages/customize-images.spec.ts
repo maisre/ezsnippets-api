@@ -60,6 +60,8 @@ function buildService(opts: {
     plansService,
     shutterstock,
     aiUsage,
+    // Templates aren't on the image-customisation path.
+    {} as any,
   );
 
   return { service, saved, openai, shutterstock, aiUsage };

@@ -259,7 +259,7 @@ export class TeamsService {
     if (!org) throw new NotFoundException('This invite is no longer valid');
 
     // Null when they're already a member — accept is then just a switch.
-    await this.orgsService.addMember(orgId, userId, invite.role);
+    const joined = await this.orgsService.addMember(orgId, userId, invite.role);
     await this.inviteModel
       .updateOne(
         { _id: invite._id },
@@ -268,6 +268,19 @@ export class TeamsService {
       .exec();
 
     this.logger.log(`User ${userId} joined org ${orgId} as ${invite.role}`);
+    if (joined) {
+      // Tell whoever sent it — or the owner, if the inviter has since left.
+      const inviterId = invite.invitedBy ? String(invite.invitedBy) : null;
+      const inviterStillMember =
+        inviterId && joined.members.some((m) => String(m.user) === inviterId);
+      await this.notify({
+        type: 'org_invite_accepted',
+        ...(inviterStillMember ? { userId: inviterId } : { orgId }),
+        orgName: org.name,
+        memberEmail: invite.email,
+        role: invite.role,
+      });
+    }
     const access_token = await this.authService.switchOrg(userId, orgId);
     return { orgId, access_token };
   }
@@ -309,6 +322,13 @@ export class TeamsService {
       throw new ForbiddenException('Only the owner can remove an admin');
     }
     await this.detach(orgId, targetId);
+    // Their tokens stop working immediately; without this they'd just see a
+    // 401 and land in their personal workspace with no idea why.
+    await this.notify({
+      type: 'org_member_removed',
+      userId: targetId,
+      orgName: org.name,
+    });
   }
 
   /** Returns a token for the caller's personal org — their current one is now dead. */
@@ -355,6 +375,18 @@ export class TeamsService {
       }
     }
     this.logger.log(`User ${userId} removed from org ${orgId}`);
+  }
+
+  /**
+   * Fire-and-forget notification email. The membership change has already
+   * happened, so a queue hiccup is logged rather than failing the request.
+   */
+  private async notify(message: Record<string, unknown>): Promise<void> {
+    try {
+      await this.sqsService.sendMessage(this.emailQueueUrl, message);
+    } catch (err) {
+      this.logger.error(`Failed to queue ${message.type} email`, err as Error);
+    }
   }
 
   private async requireRole(

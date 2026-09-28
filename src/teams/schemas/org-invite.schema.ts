@@ -6,8 +6,9 @@ import * as mongoose from 'mongoose';
  * database read can't be turned into a way in.
  *
  * Accepted invites are kept (acceptedAt set) as a record of who let whom in;
- * revoked ones are deleted. Pending = no acceptedAt and not yet expired, and
- * pending invites hold a seat — see TeamsService.seatsUsed.
+ * revoked ones are deleted, and expired ones are swept by the TTL index below.
+ * Pending = no acceptedAt and not yet expired, and pending invites hold a
+ * seat — see TeamsService.seatsUsed.
  */
 export const OrgInviteSchema = new mongoose.Schema({
   org: { type: mongoose.Schema.Types.ObjectId, ref: 'org', required: true },
@@ -24,3 +25,18 @@ export const OrgInviteSchema = new mongoose.Schema({
 });
 
 OrgInviteSchema.index({ org: 1, email: 1 });
+
+/** How long an expired invite lingers, so its link says "expired" rather than "invalid". */
+const EXPIRED_INVITE_GRACE_SECONDS = 30 * 24 * 60 * 60;
+
+// Sweeps unaccepted invites a grace period after they expire. `acceptedAt:
+// null` is the only way to say "not accepted" in a partial index ($exists:
+// false isn't supported), and it matches a missing field, so accepted invites
+// are never swept.
+OrgInviteSchema.index(
+  { expiresAt: 1 },
+  {
+    expireAfterSeconds: EXPIRED_INVITE_GRACE_SECONDS,
+    partialFilterExpression: { acceptedAt: null },
+  },
+);

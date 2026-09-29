@@ -1,8 +1,11 @@
 import {
   Body,
   Controller,
+  Delete,
+  Get,
   Headers,
   HttpCode,
+  Param,
   Post,
   RawBody,
   Request,
@@ -44,6 +47,35 @@ export class PaymentsController {
       req.user.email,
       body?.priceId,
     );
+  }
+
+  // Team -> single-seat downgrade. Owner-only, enforced in the service. Keyed
+  // by the team's id rather than the caller's activeOrg so the owner can
+  // manage it from wherever they are.
+  @UseGuards(JwtAuthGuard)
+  @Get('teams/:orgId/downgrade')
+  async previewTeamDowngrade(@Request() req, @Param('orgId') orgId: string) {
+    return this.paymentService.previewTeamDowngrade(req.user.userId, orgId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('teams/:orgId/downgrade')
+  async scheduleTeamDowngrade(
+    @Request() req,
+    @Param('orgId') orgId: string,
+    @Body() body: { keepDomainId?: string },
+  ) {
+    return this.paymentService.scheduleTeamDowngrade(
+      req.user.userId,
+      orgId,
+      body?.keepDomainId,
+    );
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Delete('teams/:orgId/downgrade')
+  async cancelTeamDowngrade(@Request() req, @Param('orgId') orgId: string) {
+    return this.paymentService.cancelTeamDowngrade(req.user.userId, orgId);
   }
 
   // Owner-only — enforced in the service, which has the org membership.

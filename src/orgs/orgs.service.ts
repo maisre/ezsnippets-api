@@ -10,6 +10,7 @@ import {
   FavoriteSnippet,
   Org,
   OrgMember,
+  ScheduledDowngrade,
 } from './interfaces/org.interface';
 import { FAVORITE_SNIPPETS_LIMIT, FAVORITES_FULL_MESSAGE } from './favorites';
 
@@ -185,6 +186,63 @@ export class OrgsService {
       .exists({ _id: orgId, 'members.user': userId })
       .exec();
     return !!org;
+  }
+
+  /**
+   * The org, if the user is in it — projected down to what isWorkspaceOpen
+   * reads. Runs on every authenticated request (JwtStrategy), so it stays on
+   * the members.user index and a lean read of a handful of fields.
+   */
+  async findMembership(
+    orgId: string,
+    userId: string,
+  ): Promise<Pick<
+    Org,
+    'personal' | 'plan' | 'subscriptionStatus' | 'billingBlocked' | 'scheduledDowngrade'
+  > | null> {
+    if (!Types.ObjectId.isValid(orgId) || !Types.ObjectId.isValid(userId)) {
+      return null;
+    }
+    return this.orgModel
+      .findOne({ _id: orgId, 'members.user': userId })
+      .select('personal plan subscriptionStatus billingBlocked scheduledDowngrade')
+      .lean<Org>()
+      .exec();
+  }
+
+  async setScheduledDowngrade(
+    orgId: string,
+    downgrade: ScheduledDowngrade,
+  ): Promise<Org | null> {
+    return this.orgModel
+      .findByIdAndUpdate(orgId, { $set: { scheduledDowngrade: downgrade } }, { new: true })
+      .exec();
+  }
+
+  async clearScheduledDowngrade(orgId: string): Promise<Org | null> {
+    return this.orgModel
+      .findByIdAndUpdate(orgId, { $unset: { scheduledDowngrade: 1 } }, { new: true })
+      .exec();
+  }
+
+  /** Downgrades that have taken effect but still owe a domain carry-over. */
+  async findDowngradesOwingDomain(now = new Date()): Promise<Org[]> {
+    return this.orgModel
+      .find({
+        'scheduledDowngrade.until': { $lte: now },
+        'scheduledDowngrade.keepDomainId': { $exists: true },
+        'scheduledDowngrade.domainCarriedAt': { $exists: false },
+      })
+      .exec();
+  }
+
+  async markDowngradeDomainCarried(orgId: string): Promise<void> {
+    await this.orgModel
+      .updateOne(
+        { _id: orgId },
+        { $set: { 'scheduledDowngrade.domainCarriedAt': new Date() } },
+      )
+      .exec();
   }
 
   async getMemberRole(

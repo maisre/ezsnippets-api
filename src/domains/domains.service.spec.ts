@@ -179,3 +179,62 @@ describe('DomainsService.assertCanManage', () => {
     );
   });
 });
+
+/**
+ * The one domain an owner keeps when downgrading a team moves to their
+ * personal org at the start of the next sweep after the downgrade lands.
+ */
+describe('DomainsService carry-over after a team downgrade', () => {
+  const team = {
+    _id: 'team1',
+    scheduledDowngrade: { keepDomainId: 'd1', personalOrgId: 'personal1' },
+  };
+  let moved: any[];
+  let carried: string[];
+  let service: DomainsService;
+  let room: boolean;
+  let found: any;
+
+  beforeEach(() => {
+    moved = [];
+    carried = [];
+    room = true;
+    found = { _id: 'd1', hostname: 'preview.client.com' };
+    const model: any = {
+      findOne: () => ({ exec: async () => found }),
+      updateOne: (filter: any, update: any) => {
+        moved.push({ filter, update });
+        return { exec: async () => ({}) };
+      },
+      find: () => ({ exec: async () => [] }),
+    };
+    const orgs: any = {
+      findDowngradesOwingDomain: async () => [team],
+      markDowngradeDomainCarried: async (id: string) => carried.push(id),
+    };
+    service = new DomainsService(model, orgs, {} as any);
+    jest.spyOn(service, 'hasRoomFor').mockImplementation(async () => room);
+  });
+
+  it('moves the kept domain to the personal org and marks it done', async () => {
+    await service.reverifyAll();
+    expect(moved).toEqual([
+      { filter: { _id: 'd1' }, update: { $set: { org: 'personal1' } } },
+    ]);
+    expect(carried).toEqual(['team1']);
+  });
+
+  it('leaves it with the team, once, when the personal slot has been used since', async () => {
+    room = false;
+    await service.reverifyAll();
+    expect(moved).toEqual([]);
+    expect(carried).toEqual(['team1']);
+  });
+
+  it('does not retry forever for a domain that was removed', async () => {
+    found = null;
+    await service.reverifyAll();
+    expect(moved).toEqual([]);
+    expect(carried).toEqual(['team1']);
+  });
+});

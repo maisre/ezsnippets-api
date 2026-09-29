@@ -51,6 +51,27 @@ export const OrgSchema = new mongoose.Schema(
     cancelAtPeriodEnd: { type: Boolean, default: false },
     subscriptionEventAt: { type: Date },
     billingBlocked: { type: Boolean, default: false },
+    // See ScheduledDowngrade in org.interface.ts. Kept after it lapses as a
+    // record of what happened; entitlement only reads it while `until` is in
+    // the future.
+    scheduledDowngrade: {
+      type: new mongoose.Schema(
+        {
+          until: { type: Date, required: true },
+          productId: { type: String, required: true },
+          fromPriceId: { type: String, required: true },
+          toPlan: { type: String },
+          subscriptionId: { type: String, required: true },
+          personalOrgId: { type: mongoose.Schema.Types.ObjectId, ref: 'org' },
+          keepDomainId: { type: mongoose.Schema.Types.ObjectId },
+          domainCarriedAt: { type: Date },
+          scheduledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'user' },
+          scheduledAt: { type: Date },
+        },
+        { _id: false },
+      ),
+      default: undefined,
+    },
     // Local mirror of Paddle adjustments (refunds, credits, chargebacks) so
     // billing questions can be answered from the org doc instead of the Paddle
     // dashboard. Paddle remains the system of record. Capped at the most recent

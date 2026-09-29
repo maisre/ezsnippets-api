@@ -21,7 +21,10 @@ import { LayoutsService } from '../layouts/layouts.service';
 import { TemplatesService } from '../templates/templates.service';
 import { DomainsService } from '../domains/domains.service';
 import { ORG_INVITE_MODEL } from './teams.providers';
-import { hasActiveSubscription } from '../plans/subscription-status';
+import {
+  hasActiveSubscription,
+  isWorkspaceOpen,
+} from '../plans/subscription-status';
 
 type Role = OrgMember['role'];
 /** Roles an invite or a role change may grant. Ownership isn't transferable yet. */
@@ -266,6 +269,13 @@ export class TeamsService {
     const orgId = String(invite.org);
     const org = await this.orgsService.findOne(orgId);
     if (!org) throw new NotFoundException('This invite is no longer valid');
+    // A closed team takes its pending invites with it. Refused before
+    // addMember so nobody is added to a workspace they can't switch into.
+    if (!isWorkspaceOpen(org)) {
+      throw new GoneException(
+        'This team workspace no longer has an active plan, so its invites have lapsed.',
+      );
+    }
 
     // Null when they're already a member — accept is then just a switch.
     const joined = await this.orgsService.addMember(orgId, userId, invite.role);

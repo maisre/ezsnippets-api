@@ -9,7 +9,10 @@ import {
   PlanTier,
   tierForProduct,
 } from './plan-catalog';
-import { hasActiveSubscription } from './subscription-status';
+import {
+  downgradeGraceProductId,
+  hasActiveSubscription,
+} from './subscription-status';
 import { OrgsService } from '../orgs/orgs.service';
 import type { Org } from '../orgs/interfaces/org.interface';
 
@@ -57,6 +60,17 @@ export class PlansService {
       return {
         plan: this.planName(org.productId),
         limits: this.getLimits(org.productId),
+        source: 'subscription',
+      };
+    }
+
+    // A team its owner has downgraded keeps the tier it paid for until the
+    // period ends — the subscription itself already sits on their personal org.
+    const graceProductId = downgradeGraceProductId(org);
+    if (graceProductId) {
+      return {
+        plan: this.planName(graceProductId),
+        limits: this.getLimits(graceProductId),
         source: 'subscription',
       };
     }

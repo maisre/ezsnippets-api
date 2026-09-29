@@ -15,12 +15,19 @@ import {
   type SubscriptionNotification,
   type TransactionNotification,
 } from '@paddle/paddle-node-sdk';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Org } from '../orgs/interfaces/org.interface';
 import { OrgsService } from '../orgs/orgs.service';
 import { pickPlanRef, PlanRef, PlanTier } from '../plans/plan-catalog';
-import { hasActiveSubscription } from '../plans/subscription-status';
-import { PaddleCatalogService } from '../plans/paddle-catalog.service';
+import {
+  downgradeGraceProductId,
+  hasActiveSubscription,
+} from '../plans/subscription-status';
+import {
+  BillingInterval,
+  PaddleCatalogService,
+} from '../plans/paddle-catalog.service';
+import { DomainsService } from '../domains/domains.service';
 import { PlansService } from '../plans/plans.service';
 import { PADDLE_CLIENT } from '../paddle/paddle.module';
 import { SqsService } from '../sqs/sqs.service';
@@ -65,6 +72,7 @@ export class PaymentsService {
     private readonly plansService: PlansService,
     private readonly catalogService: PaddleCatalogService,
     private readonly sqsService: SqsService,
+    private readonly domainsService: DomainsService,
   ) {}
 
   /**
@@ -214,11 +222,276 @@ export class PaymentsService {
       subscriptionEventAt: personal.subscriptionEventAt,
     });
     await this.orgsService.clearSubscription(String(personal._id));
+    await this.clearEndedDowngrade(team);
 
     this.logger.log(
       `Subscription ${sub.id} upgraded to ${tier.name} and moved ${personal._id} -> ${teamId}`,
     );
     return { orgId: teamId };
+  }
+
+  /**
+   * What moving a team down to a single-seat tier would do — for the
+   * confirmation screen, which has to spell out that the team closes.
+   */
+  async previewTeamDowngrade(userId: string, orgId: string) {
+    const team = await this.assertOwner(orgId, userId);
+    const scheduled = downgradeGraceProductId(team) ? team.scheduledDowngrade! : null;
+
+    const [teamDomains, personal] = await Promise.all([
+      this.domainsService.findAllForOrg(orgId),
+      this.orgsService.findPersonalOrg(userId),
+    ]);
+    const base = {
+      memberCount: team.members.length,
+      teamDomains: teamDomains.map((d) => ({
+        id: String(d._id),
+        hostname: d.hostname,
+        status: d.status,
+      })),
+      personalDomainRoom: personal
+        ? await this.domainsService.hasRoomFor(String(personal._id))
+        : false,
+    };
+
+    if (scheduled) {
+      const kept = scheduled.keepDomainId
+        ? teamDomains.find((d) => String(d._id) === String(scheduled.keepDomainId))
+        : undefined;
+      return {
+        ...base,
+        scheduled: {
+          effectiveAt: scheduled.until.toISOString(),
+          plan: scheduled.toPlan,
+          keepHostname: kept?.hostname ?? null,
+        },
+      };
+    }
+
+    const { tier, price, interval } = await this.downgradeTarget(team);
+    return {
+      ...base,
+      scheduled: null,
+      plan: tier,
+      interval,
+      amount: price.amount,
+      currency: price.currency,
+      effectiveAt: this.periodEndIso(team),
+    };
+  }
+
+  /**
+   * Move a team subscription down to the owner's single-seat tier (Agency ->
+   * Pro), taking effect when the current period ends.
+   *
+   * Paddle can't schedule an item change — scheduled_change is cancel, pause
+   * or resume only — so the change is made now with `do_not_bill`: no charge
+   * today, no credit for the rest of the period, and the next renewal bills
+   * the new tier at its normal price. (Not `full_next_billing_period`, which
+   * sounds right but adds a full charge for the new items *on top of* the
+   * renewal — it double-bills the first month.) The subscription moves to the owner's personal org the same way
+   * upgradeToTeam moved it up, and the team keeps its tier until the period
+   * ends via scheduledDowngrade. Nothing has to fire on time for the billing
+   * to be right; only the optional domain carry-over waits for a sweep.
+   */
+  async scheduleTeamDowngrade(
+    userId: string,
+    orgId: string,
+    keepDomainId?: unknown,
+  ): Promise<{ effectiveAt: string }> {
+    const team = await this.assertOwner(orgId, userId);
+    const personal = await this.orgsService.findPersonalOrg(userId);
+    if (!personal) throw new NotFoundException('Personal workspace not found');
+    if (hasActiveSubscription(personal) && personal.subscriptionStatus) {
+      throw new ConflictException(
+        'Your personal workspace already has its own plan. Cancel the team plan instead.',
+      );
+    }
+
+    const { tier, price } = await this.downgradeTarget(team);
+
+    let keep: Types.ObjectId | undefined;
+    if (keepDomainId !== undefined && keepDomainId !== null && keepDomainId !== '') {
+      const domains = await this.domainsService.findAllForOrg(orgId);
+      const domain = domains.find((d) => String(d._id) === String(keepDomainId));
+      if (!domain) throw new BadRequestException('That domain isn’t on this team.');
+      if (!(await this.domainsService.hasRoomFor(String(personal._id)))) {
+        throw new ConflictException(
+          'Your personal workspace already uses its custom domain. Remove it there first to bring a team domain across.',
+        );
+      }
+      keep = domain._id as Types.ObjectId;
+    }
+
+    const until = new Date(this.periodEndIso(team));
+    const sub = await this.paddle.subscriptions
+      .update(team.subscriptionId!, {
+        items: [{ priceId: price.id, quantity: 1 }],
+        prorationBillingMode: 'do_not_bill',
+        customData: { orgId: String(personal._id) },
+      })
+      .catch(rethrowPaddleRefusal);
+
+    // Personal first, then the team: dying in between leaves both entitled
+    // (support clean-up), never the owner locked out — as in upgradeToTeam.
+    const ref = this.planRefFor(sub as unknown as SubscriptionNotification);
+    await this.orgsService.updateSubscription(String(personal._id), {
+      paddleCustomerId: sub.customerId,
+      subscriptionId: sub.id,
+      plan: ref.priceId,
+      productId: ref.productId,
+      subscriptionStatus: sub.status,
+      currentPeriodEnd: this.toUnixSeconds(sub.currentBillingPeriod?.endsAt),
+      cancelAtPeriodEnd: sub.scheduledChange?.action === 'cancel',
+      cardBrand: team.cardBrand ?? null,
+      cardLast4: team.cardLast4 ?? null,
+      cardExpMonth: team.cardExpMonth ?? null,
+      cardExpYear: team.cardExpYear ?? null,
+      subscriptionEventAt: team.subscriptionEventAt,
+    });
+    await this.orgsService.setScheduledDowngrade(orgId, {
+      until,
+      productId: team.productId!,
+      fromPriceId: team.plan!,
+      toPlan: tier,
+      subscriptionId: sub.id,
+      personalOrgId: personal._id as Types.ObjectId,
+      keepDomainId: keep,
+      scheduledBy: new Types.ObjectId(userId),
+      scheduledAt: new Date(),
+    });
+    await this.orgsService.clearSubscription(orgId);
+
+    this.logger.log(
+      `Team ${orgId} downgraded to ${tier} from ${until.toISOString()}; subscription ${sub.id} moved to ${personal._id}`,
+    );
+    return { effectiveAt: until.toISOString() };
+  }
+
+  /**
+   * Take back a scheduled downgrade before it lands: the subscription returns
+   * to the team price and the team org. `do_not_bill` because this period is
+   * already paid at the team rate; the next renewal bills it in full again.
+   */
+  async cancelTeamDowngrade(userId: string, orgId: string): Promise<{ orgId: string }> {
+    const team = await this.assertOwner(orgId, userId);
+    const scheduled = team.scheduledDowngrade;
+    if (!scheduled || !downgradeGraceProductId(team)) {
+      throw new BadRequestException('There’s no scheduled downgrade to cancel.');
+    }
+    const holder = await this.orgsService.findBySubscriptionId(scheduled.subscriptionId);
+    if (!holder || String(holder._id) !== String(scheduled.personalOrgId)) {
+      throw new ConflictException(
+        'That subscription has changed since the downgrade was scheduled. Contact support to put the team plan back.',
+      );
+    }
+    if (!hasActiveSubscription(holder)) {
+      throw new ConflictException(
+        'The subscription is no longer active, so the team plan can’t be restored. Buy the team plan again instead.',
+      );
+    }
+
+    const sub = await this.paddle.subscriptions
+      .update(scheduled.subscriptionId, {
+        items: [{ priceId: scheduled.fromPriceId, quantity: 1 }],
+        prorationBillingMode: 'do_not_bill',
+        customData: { orgId },
+      })
+      .catch(rethrowPaddleRefusal);
+
+    const ref = this.planRefFor(sub as unknown as SubscriptionNotification);
+    await this.orgsService.updateSubscription(orgId, {
+      paddleCustomerId: sub.customerId,
+      subscriptionId: sub.id,
+      plan: ref.priceId,
+      productId: ref.productId,
+      subscriptionStatus: sub.status,
+      currentPeriodEnd: this.toUnixSeconds(sub.currentBillingPeriod?.endsAt),
+      cancelAtPeriodEnd: sub.scheduledChange?.action === 'cancel',
+      cardBrand: holder.cardBrand ?? null,
+      cardLast4: holder.cardLast4 ?? null,
+      cardExpMonth: holder.cardExpMonth ?? null,
+      cardExpYear: holder.cardExpYear ?? null,
+      subscriptionEventAt: holder.subscriptionEventAt,
+    });
+    await this.orgsService.clearScheduledDowngrade(orgId);
+    await this.orgsService.clearSubscription(String(holder._id));
+
+    this.logger.log(`Downgrade of team ${orgId} cancelled; subscription ${sub.id} moved back`);
+    return { orgId };
+  }
+
+  /**
+   * The single-seat tier and price a team moves down to: the tier its owners
+   * already get on their personal org (ownerPersonalTier), on the same billing
+   * interval they pay the team on now.
+   */
+  private async downgradeTarget(team: Org): Promise<{
+    tier: string;
+    price: { id: string; amount: string; currency: string };
+    interval: BillingInterval;
+  }> {
+    const current = this.plansService.findTier(team.productId);
+    if (
+      team.personal ||
+      !team.subscriptionId ||
+      !hasActiveSubscription(team) ||
+      !current ||
+      current.limits.maxSeats <= 1 ||
+      !current.ownerPersonalTier
+    ) {
+      throw new BadRequestException('This workspace isn’t on a team plan.');
+    }
+    if (team.subscriptionStatus === 'trialing') {
+      throw new ConflictException({
+        message:
+          'A trial can’t change plans. Cancel the team trial from Manage Billing, then choose Pro for your personal workspace.',
+        code: 'TRIAL_CANCEL_INSTEAD',
+      });
+    }
+    if (team.subscriptionStatus !== 'active') {
+      throw new ConflictException(
+        'Sort out the payment on this plan before changing it — Manage Billing has the details.',
+      );
+    }
+    if (team.cancelAtPeriodEnd) {
+      throw new ConflictException(
+        'This plan is already set to end. Resume it from Manage Billing first if you’d rather move to Pro.',
+      );
+    }
+
+    const sub = await this.paddle.subscriptions.get(team.subscriptionId);
+    const item = sub.items.find((i) => i.price?.productId === team.productId) ?? sub.items[0];
+    const interval = item?.price?.billingCycle?.interval;
+    if (interval !== 'month' && interval !== 'year') {
+      throw new ConflictException('This plan’s billing interval can’t be changed here. Contact support.');
+    }
+    const catalog = await this.catalogService.getCatalog();
+    const price = catalog.plans.find((p) => p.name === current.ownerPersonalTier)
+      ?.prices[interval];
+    if (!price) {
+      throw new ConflictException(
+        `There’s no ${interval}ly ${current.ownerPersonalTier} price available right now. Try again shortly.`,
+      );
+    }
+    return { tier: current.ownerPersonalTier, price, interval };
+  }
+
+  private periodEndIso(org: Org): string {
+    if (!org.currentPeriodEnd) {
+      throw new ConflictException('This plan has no billing period on record yet. Try again shortly.');
+    }
+    return new Date(org.currentPeriodEnd * 1000).toISOString();
+  }
+
+  /**
+   * A team being paid for again no longer owes anything to a downgrade that
+   * ended — and must not have its kept domain moved away by the sweep.
+   */
+  private async clearEndedDowngrade(org: Org | null): Promise<void> {
+    if (org?.scheduledDowngrade) {
+      await this.orgsService.clearScheduledDowngrade(String(org._id));
+    }
   }
 
   private async upgradeContext(
@@ -236,6 +509,17 @@ export class PaymentsService {
       !hasActiveSubscription(personal)
     ) {
       throw new BadRequestException('No active subscription to upgrade.');
+    }
+    // Their subscription only sits here because they downgraded a team that
+    // is still paid up. Going back up is undoing that, not a new prorated
+    // charge for a period the team has already paid for.
+    const owned = await this.orgsService.findTeamOrgsOwnedBy(userId);
+    if (owned.some((o) => downgradeGraceProductId(o))) {
+      throw new ConflictException({
+        message:
+          'Your team is scheduled to move to a single-seat plan. Cancel that from the account page to keep the team plan.',
+        code: 'DOWNGRADE_SCHEDULED',
+      });
     }
     if (personal.subscriptionStatus === 'trialing') {
       throw new ConflictException({
@@ -506,6 +790,7 @@ export class PaymentsService {
       cancelAtPeriodEnd: sub.scheduledChange?.action === 'cancel',
       subscriptionEventAt: occurredAt,
     });
+    await this.clearEndedDowngrade(org);
 
     await this.sqsService.sendMessage(this.emailQueueUrl, {
       type: 'subscription_confirmed',

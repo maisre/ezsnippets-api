@@ -27,6 +27,31 @@ export interface FavoriteSnippet {
   addedAt?: Date;
 }
 
+/**
+ * Left on a team org when its owner moves it down to a single-seat tier. The
+ * subscription itself has already moved to the owner's personal org; this is
+ * what keeps the team open until the period it paid for ends, and what undo
+ * needs to move the subscription back. See PaymentsService.scheduleTeamDowngrade.
+ */
+export interface ScheduledDowngrade {
+  /** End of the paid-up period. The team shuts when this passes. */
+  until: Date;
+  /** The team tier's product — what the team stays entitled to until then. */
+  productId: string;
+  /** The team price the subscription was on, for undo. */
+  fromPriceId: string;
+  /** The single-seat tier it moved to (display only). */
+  toPlan: string;
+  subscriptionId: string;
+  personalOrgId: Types.ObjectId;
+  /** A team custom domain the owner chose to carry over to their personal org. */
+  keepDomainId?: Types.ObjectId;
+  /** Set once the sweep has moved keepDomainId across. */
+  domainCarriedAt?: Date;
+  scheduledBy: Types.ObjectId;
+  scheduledAt: Date;
+}
+
 export interface Org extends Document {
   readonly name: string;
   readonly personal: boolean;
@@ -53,4 +78,5 @@ export interface Org extends Document {
   // occurred_at of the last subscription event applied. Paddle doesn't order
   // its webhooks, so this is how we drop ones that arrive late.
   subscriptionEventAt?: Date;
+  scheduledDowngrade?: ScheduledDowngrade;
 }

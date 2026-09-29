@@ -10,6 +10,7 @@ import {
 import { Model } from 'mongoose';
 import { UsersService } from '../users/users.service';
 import { OrgsService } from '../orgs/orgs.service';
+import { isWorkspaceOpen } from '../plans/subscription-status';
 import { SqsService } from '../sqs/sqs.service';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
@@ -98,15 +99,16 @@ export class AuthService {
   /**
    * The org to mint a token for. JwtStrategy rejects any token whose activeOrg
    * the user isn't a member of, so minting one from a stale user.activeOrg
-   * (removed from a team, org gone) would lock them out on every login. Fall
+   * (removed from a team, org gone, team plan ended) would lock them out on every login. Fall
    * back to — and persist — their personal org instead.
    */
   private async resolveActiveOrg(
     userId: string,
     activeOrg: unknown,
   ): Promise<string | undefined> {
-    if (activeOrg && (await this.orgsService.isUserMember(String(activeOrg), userId))) {
-      return String(activeOrg);
+    if (activeOrg) {
+      const org = await this.orgsService.findMembership(String(activeOrg), userId);
+      if (isWorkspaceOpen(org)) return String(activeOrg);
     }
     const personal = await this.orgsService.findPersonalOrg(userId);
     if (!personal) return activeOrg ? String(activeOrg) : undefined;
@@ -116,8 +118,16 @@ export class AuthService {
 
   /** Make `orgId` the user's workspace and mint a token scoped to it. */
   async switchOrg(userId: string, orgId: string): Promise<string> {
-    if (!(await this.orgsService.isUserMember(orgId, userId))) {
+    const org = await this.orgsService.findMembership(orgId, userId);
+    if (!org) {
       throw new ForbiddenException('You are not a member of that workspace');
+    }
+    if (!isWorkspaceOpen(org)) {
+      throw new ForbiddenException({
+        message:
+          'This team workspace has no active plan, so it’s closed. The owner can buy the team plan again to reopen it.',
+        code: 'WORKSPACE_CLOSED',
+      });
     }
     await this.usersService.updateActiveOrg(userId, orgId);
     return this.issueSessionToken(userId);

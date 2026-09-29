@@ -258,6 +258,10 @@ export class DomainsService {
     demoted: number;
     failed: number;
   }> {
+    // Before the entitlement pass, so a carried-over domain is checked
+    // against its new org rather than demoted with the team it left.
+    await this.carryOverFromEndedDowngrades();
+
     const domains = await this.findCheckable();
     const entitlementCache = new Map<string, boolean>();
     let active = 0;
@@ -400,6 +404,57 @@ export class DomainsService {
         detail: servable.ok ? null : servable.detail,
       },
     };
+  }
+
+  /**
+   * Move the custom domain an owner chose to keep when downgrading their team
+   * onto their personal org, once the downgrade has taken effect. Until then it
+   * keeps serving the team, which is still paid up.
+   *
+   * The customer's CNAME already points at us, so moving the row is all it
+   * takes — the domain then serves the personal org's pages by slug. Rechecked
+   * here rather than trusted from scheduling time: the owner may have used the
+   * personal slot since. Every outcome marks the downgrade done, so a domain
+   * that can't move is logged once rather than retried every hour.
+   */
+  private async carryOverFromEndedDowngrades(): Promise<void> {
+    const owing = await this.orgsService.findDowngradesOwingDomain();
+    for (const team of owing) {
+      const { keepDomainId, personalOrgId } = team.scheduledDowngrade!;
+      const teamId = String(team._id);
+      const personalId = String(personalOrgId);
+      try {
+        const domain = await this.domainModel
+          .findOne({ _id: keepDomainId, org: teamId })
+          .exec();
+        if (!domain) {
+          this.logger.warn(`Downgrade of ${teamId}: kept domain ${keepDomainId} is gone`);
+        } else if (!(await this.hasRoomFor(personalId))) {
+          this.logger.warn(
+            `Downgrade of ${teamId}: ${domain.hostname} not moved, org ${personalId} is at its domain limit`,
+          );
+        } else {
+          await this.domainModel
+            .updateOne({ _id: domain._id }, { $set: { org: personalId } })
+            .exec();
+          this.logger.log(`Downgrade of ${teamId}: moved ${domain.hostname} to ${personalId}`);
+        }
+      } catch (err) {
+        // Left unmarked so the next sweep retries.
+        this.logger.error(`Downgrade of ${teamId}: domain carry-over failed: ${err}`);
+        continue;
+      }
+      await this.orgsService.markDowngradeDomainCarried(teamId);
+    }
+  }
+
+  /** Whether an org's plan has a free custom-domain slot. */
+  async hasRoomFor(orgId: string): Promise<boolean> {
+    const org = await this.orgsService.findOne(orgId);
+    const entitlement = await this.plansService.entitlementFor(org);
+    const max = entitlement?.limits.maxCustomDomains ?? 0;
+    if (max === -1) return true;
+    return (await this.countForOrg(orgId)) < max;
   }
 
   /** Does this org currently pay for custom domains at all? */

@@ -7,6 +7,7 @@ import { OrgsModule } from '../orgs/orgs.module';
 import { PlansModule } from '../plans/plans.module';
 import { PaddleModule } from '../paddle/paddle.module';
 import { DatabaseModule } from '../database/database.module';
+import { DomainsModule } from '../domains/domains.module';
 
 @Module({})
 export class PaymentsModule {
@@ -20,6 +21,7 @@ export class PaymentsModule {
         OrgsModule,
         PlansModule,
         DatabaseModule,
+        DomainsModule,
       ],
       providers: [
         ...paymentsProviders,

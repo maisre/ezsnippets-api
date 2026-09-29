@@ -79,4 +79,11 @@ export interface Org extends Document {
   // its webhooks, so this is how we drop ones that arrive late.
   subscriptionEventAt?: Date;
   scheduledDowngrade?: ScheduledDowngrade;
+  /**
+   * Who pays for this team's subscription, recorded when ownership is first
+   * transferred away from them — until then the owner is the payer. Billing
+   * stays with them after a transfer; cleared when the team gets a new
+   * subscription. See TeamsService.transferOwnership.
+   */
+  billingPayerId?: Types.ObjectId;
 }

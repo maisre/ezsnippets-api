@@ -72,6 +72,16 @@ export class TeamsController {
     await this.teamsService.setRole(orgId, req.user.userId, userId, body?.role);
   }
 
+  @Post('transfer')
+  @HttpCode(204)
+  async transferOwnership(
+    @Param('id') orgId: string,
+    @Body() body: { userId?: string },
+    @Request() req,
+  ) {
+    await this.teamsService.transferOwnership(orgId, req.user.userId, body?.userId);
+  }
+
   @Delete('members/:userId')
   @HttpCode(204)
   async removeMember(

@@ -236,6 +236,7 @@ export class PaymentsService {
    */
   async previewTeamDowngrade(userId: string, orgId: string) {
     const team = await this.assertOwner(orgId, userId);
+    this.assertPayer(team, userId);
     const scheduled = downgradeGraceProductId(team) ? team.scheduledDowngrade! : null;
 
     const [teamDomains, personal] = await Promise.all([
@@ -300,6 +301,7 @@ export class PaymentsService {
     keepDomainId?: unknown,
   ): Promise<{ effectiveAt: string }> {
     const team = await this.assertOwner(orgId, userId);
+    this.assertPayer(team, userId);
     const personal = await this.orgsService.findPersonalOrg(userId);
     if (!personal) throw new NotFoundException('Personal workspace not found');
     if (hasActiveSubscription(personal) && personal.subscriptionStatus) {
@@ -422,6 +424,22 @@ export class PaymentsService {
   }
 
   /**
+   * A downgrade moves the subscription onto the caller's personal workspace.
+   * After an ownership transfer the subscription is still the previous
+   * owner's, so it can't become the new owner's personal plan: they cancel
+   * the team plan instead and buy their own.
+   */
+  private assertPayer(team: Org, userId: string): void {
+    if (team.billingPayerId && String(team.billingPayerId) !== userId) {
+      throw new ConflictException({
+        message:
+          'This team’s plan is still billed to the previous owner, so it can’t become your personal plan. Cancel the team plan from Manage Billing, then choose Pro for your personal workspace.',
+        code: 'BILLED_TO_PREVIOUS_OWNER',
+      });
+    }
+  }
+
+  /**
    * The single-seat tier and price a team moves down to: the tier its owners
    * already get on their personal org (ownerPersonalTier), on the same billing
    * interval they pay the team on now.
@@ -485,12 +503,17 @@ export class PaymentsService {
   }
 
   /**
-   * A team being paid for again no longer owes anything to a downgrade that
-   * ended — and must not have its kept domain moved away by the sweep.
+   * A team with a new subscription no longer owes anything to a downgrade
+   * that ended — and must not have its kept domain moved away by the sweep.
    */
   private async clearEndedDowngrade(org: Org | null): Promise<void> {
     if (org?.scheduledDowngrade) {
       await this.orgsService.clearScheduledDowngrade(String(org._id));
+    }
+    // A new subscription is paid by whoever bought it — the owner — so the
+    // previous payer recorded at a transfer no longer applies.
+    if (org?.billingPayerId) {
+      await this.orgsService.clearBillingPayer(String(org._id));
     }
   }
 

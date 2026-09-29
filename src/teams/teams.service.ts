@@ -22,6 +22,7 @@ import { TemplatesService } from '../templates/templates.service';
 import { DomainsService } from '../domains/domains.service';
 import { ORG_INVITE_MODEL } from './teams.providers';
 import {
+  downgradeGraceProductId,
   hasActiveSubscription,
   isWorkspaceOpen,
 } from '../plans/subscription-status';
@@ -348,6 +349,64 @@ export class TeamsService {
       userId: targetId,
       orgName: org.name,
     });
+  }
+
+  /**
+   * Hand the team to an existing member. The old owner becomes an admin, so
+   * they can stay or leave afterwards like anyone else.
+   *
+   * Billing does not move: the subscription keeps charging whoever paid for
+   * it, and the new owner gets the billing portal for that Paddle customer
+   * (card last four, invoices, address) until they change the details there.
+   * The UI says so before confirming. billingPayerId records who that payer
+   * is, the first time the team changes hands, so nothing later mistakes the
+   * new owner for them — see PaymentsService.assertPayer.
+   *
+   * Everything derived from ownership follows by itself: the included
+   * personal Pro (PlansService.entitlementFor) and the billing emails, which
+   * go to the owner.
+   */
+  async transferOwnership(
+    orgId: string,
+    actorId: string,
+    rawTargetId: unknown,
+  ): Promise<void> {
+    const { org } = await this.requireRole(orgId, actorId, ['owner']);
+    if (org.personal) {
+      throw new BadRequestException('A personal workspace can’t change hands.');
+    }
+    const targetId = typeof rawTargetId === 'string' ? rawTargetId : '';
+    if (targetId === actorId) {
+      throw new BadRequestException('You already own this workspace.');
+    }
+    findMember(org, targetId);
+    // The scheduled downgrade has already put the subscription on the current
+    // owner's personal workspace; a new owner couldn't undo it.
+    if (downgradeGraceProductId(org)) {
+      throw new ConflictException(
+        'This team is scheduled to move to Pro. Keep the Agency plan first, or transfer it once the change has happened.',
+      );
+    }
+
+    const payer = org.billingPayerId
+      ? undefined
+      : org.subscriptionId
+        ? actorId
+        : undefined;
+    const updated = await this.orgsService.transferOwnership(orgId, actorId, targetId, payer);
+    if (!updated) {
+      throw new ConflictException('The team changed while you were doing that. Reload and try again.');
+    }
+
+    const previous = await this.usersService.findById(actorId);
+    await this.notify({
+      type: 'org_ownership_received',
+      userId: targetId,
+      orgName: org.name,
+      fromEmail: previous?.email ?? null,
+      billedToSomeoneElse: !!(updated.subscriptionId && updated.billingPayerId && String(updated.billingPayerId) !== targetId),
+    });
+    this.logger.log(`Org ${orgId} ownership transferred ${actorId} -> ${targetId}`);
   }
 
   /** Returns a token for the caller's personal org — their current one is now dead. */

@@ -182,6 +182,22 @@ describe('PaymentsService team downgrade', () => {
       );
     });
 
+    it('refuses an owner who took over a team someone else still pays for', async () => {
+      team.billingPayerId = new Types.ObjectId();
+      await expect(service.scheduleTeamDowngrade(userId, String(teamId))).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'BILLED_TO_PREVIOUS_OWNER' }),
+      });
+      await expect(service.previewTeamDowngrade(userId, String(teamId))).rejects.toMatchObject({
+        response: expect.objectContaining({ code: 'BILLED_TO_PREVIOUS_OWNER' }),
+      });
+      expect(paddle.subscriptions.update).not.toHaveBeenCalled();
+    });
+
+    it('lets the payer downgrade after the team is handed back to them', async () => {
+      team.billingPayerId = new Types.ObjectId(userId);
+      await expect(service.scheduleTeamDowngrade(userId, String(teamId))).resolves.toBeDefined();
+    });
+
     it('refuses a single-seat workspace', async () => {
       team.productId = PRO;
       await expect(service.scheduleTeamDowngrade(userId, String(teamId))).rejects.toBeInstanceOf(

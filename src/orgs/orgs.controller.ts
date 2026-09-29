@@ -40,6 +40,12 @@ export class OrgsController {
       if (role !== 'owner') {
         for (const field of OWNER_ONLY_FIELDS) delete json[field];
       }
+      // Who pays is a user id; the client only needs to know whether it's them.
+      if (json.billingPayerId) {
+        json.billedToSomeoneElse =
+          role === 'owner' && String(json.billingPayerId) !== req.user.userId;
+        delete json.billingPayerId;
+      }
       return {
         ...json,
         role,

@@ -51,6 +51,8 @@ export const OrgSchema = new mongoose.Schema(
     cancelAtPeriodEnd: { type: Boolean, default: false },
     subscriptionEventAt: { type: Date },
     billingBlocked: { type: Boolean, default: false },
+    // See Org.billingPayerId in org.interface.ts.
+    billingPayerId: { type: mongoose.Schema.Types.ObjectId, ref: 'user' },
     // See ScheduledDowngrade in org.interface.ts. Kept after it lapses as a
     // record of what happened; entitlement only reads it while `until` is in
     // the future.

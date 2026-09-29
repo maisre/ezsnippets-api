@@ -138,6 +138,41 @@ export class OrgsService {
   }
 
   /**
+   * Swap owner and target in one write, so there is never a moment with two
+   * owners or none. Conditioned on `fromId` still being the owner and
+   * `toId` still being a member — null if either changed underneath us.
+   */
+  async transferOwnership(
+    orgId: string,
+    fromId: string,
+    toId: string,
+    billingPayerId?: string,
+  ): Promise<Org | null> {
+    const from = new Types.ObjectId(fromId);
+    const to = new Types.ObjectId(toId);
+    const set: Record<string, unknown> = {
+      'members.$[old].role': 'admin',
+      'members.$[new].role': 'owner',
+    };
+    if (billingPayerId) set.billingPayerId = new Types.ObjectId(billingPayerId);
+    return this.orgModel
+      .findOneAndUpdate(
+        {
+          _id: orgId,
+          members: { $elemMatch: { user: from, role: 'owner' } },
+          'members.user': to,
+        },
+        { $set: set },
+        { new: true, arrayFilters: [{ 'old.user': from }, { 'new.user': to }] },
+      )
+      .exec();
+  }
+
+  async clearBillingPayer(orgId: string): Promise<void> {
+    await this.orgModel.updateOne({ _id: orgId }, { $unset: { billingPayerId: 1 } }).exec();
+  }
+
+  /**
    * Billing fields that follow a subscription when it moves between orgs (the
    * upgrade to a team tier). paddleCustomerId is deliberately absent — it
    * identifies the person, and stays on both.

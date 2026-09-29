@@ -159,6 +159,17 @@ export class TemplatesService {
     return updated;
   }
 
+  /** Soft-delete an org's own templates (team workspace deletion). */
+  async removeAllForOrg(orgId: string): Promise<number> {
+    const res = await this.templateModel
+      .updateMany(
+        { org: orgId, deletedAt: null },
+        { $set: { deletedAt: new Date() } },
+      )
+      .exec();
+    return res.modifiedCount;
+  }
+
   /** Soft delete, and only ever the org's own — library templates are ours. */
   async remove(id: string, orgId: string): Promise<void> {
     const owned = await this.findOwned(id, orgId);

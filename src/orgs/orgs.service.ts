@@ -92,6 +92,26 @@ export class OrgsService {
       .exec();
   }
 
+  /**
+   * Retire a team org: empty its member list (every membership check then
+   * refuses it) and keep who was in it on the record.
+   */
+  async markDeleted(org: Org, deletedBy: string): Promise<void> {
+    await this.orgModel
+      .updateOne(
+        { _id: org._id },
+        {
+          $set: {
+            deletedAt: new Date(),
+            deletedBy: new Types.ObjectId(deletedBy),
+            formerMembers: org.members.map((m) => ({ user: m.user, role: m.role })),
+            members: [],
+          },
+        },
+      )
+      .exec();
+  }
+
   async removeMember(orgId: string, userId: string): Promise<Org | null> {
     return this.orgModel
       .findByIdAndUpdate(

@@ -15,7 +15,8 @@ import { JwtAuthGuard } from '../auth/jwt.strategy';
 
 /**
  * Custom domains are org-scoped: every route reads and writes only the active
- * org's domains, so one customer can never see or touch another's.
+ * org's domains, so one customer can never see or touch another's. Adding and
+ * removing is owner/admin only; any member can read and re-check.
  */
 @UseGuards(JwtAuthGuard)
 @Controller('domains')
@@ -42,6 +43,10 @@ export class DomainsController {
     @Body() dto: CreateDomainDto,
     @Request() req,
   ): Promise<CustomDomain> {
+    await this.domainsService.assertCanManage(
+      req.user.activeOrg,
+      req.user.userId,
+    );
     return this.domainsService.create(
       dto.hostname,
       req.user.activeOrg,
@@ -70,6 +75,10 @@ export class DomainsController {
 
   @Delete(':id')
   async remove(@Param('id') id: string, @Request() req): Promise<void> {
+    await this.domainsService.assertCanManage(
+      req.user.activeOrg,
+      req.user.userId,
+    );
     return this.domainsService.remove(id, req.user.activeOrg);
   }
 }

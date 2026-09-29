@@ -33,6 +33,12 @@ export const OrgSchema = new mongoose.Schema(
       },
     ],
     paddleCustomerId: { type: String },
+    // Set when an owner deletes a team workspace. The org is kept (its content
+    // is only soft-deleted) but has no members, so nothing can reach it;
+    // formerMembers records who was in it for support recovery.
+    deletedAt: { type: Date },
+    deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'user' },
+    formerMembers: { type: [mongoose.Schema.Types.Mixed], default: undefined },
     subscriptionId: { type: String },
     plan: { type: String },
     productId: { type: String },

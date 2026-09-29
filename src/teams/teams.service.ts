@@ -16,7 +16,12 @@ import { UsersService } from '../users/users.service';
 import { PlansService } from '../plans/plans.service';
 import { AuthService } from '../auth/auth.service';
 import { SqsService } from '../sqs/sqs.service';
+import { PagesService } from '../pages/pages.service';
+import { LayoutsService } from '../layouts/layouts.service';
+import { TemplatesService } from '../templates/templates.service';
+import { DomainsService } from '../domains/domains.service';
 import { ORG_INVITE_MODEL } from './teams.providers';
+import { hasActiveSubscription } from '../plans/subscription-status';
 
 type Role = OrgMember['role'];
 /** Roles an invite or a role change may grant. Ownership isn't transferable yet. */
@@ -68,6 +73,10 @@ export class TeamsService {
     private readonly plansService: PlansService,
     private readonly authService: AuthService,
     private readonly sqsService: SqsService,
+    private readonly pagesService: PagesService,
+    private readonly layoutsService: LayoutsService,
+    private readonly templatesService: TemplatesService,
+    private readonly domainsService: DomainsService,
   ) {}
 
   // --- reads ---------------------------------------------------------------
@@ -357,6 +366,65 @@ export class TeamsService {
     return (await this.orgsService.rename(orgId, name))!;
   }
 
+  // --- deletion ------------------------------------------------------------
+
+  /**
+   * Delete a team workspace. Owner only, and never while a Paddle subscription
+   * on it is still alive — that has to be cancelled and run out first, or the
+   * customer would keep paying for a workspace that's gone.
+   *
+   * Pages, layouts and templates are soft-deleted (recoverable by support);
+   * custom domains are hard-deleted so their hostnames are free again; pending
+   * invites are dropped. Everyone is detached, so the org drops out of every
+   * membership check, and the caller gets a token for their personal org.
+   *
+   * `confirmName` must match the workspace name, as a server-side backstop to
+   * the UI's type-the-name confirmation.
+   */
+  async deleteTeam(
+    orgId: string,
+    actorId: string,
+    confirmName: unknown,
+  ): Promise<{ access_token: string }> {
+    const { org } = await this.requireRole(orgId, actorId, ['owner']);
+    if (org.personal) {
+      throw new BadRequestException('Your personal workspace can’t be deleted.');
+    }
+    if (typeof confirmName !== 'string' || confirmName.trim() !== org.name) {
+      throw new BadRequestException('Type the workspace name to confirm.');
+    }
+    if (
+      hasActiveSubscription(org) ||
+      (org.subscriptionId && org.subscriptionStatus !== 'canceled')
+    ) {
+      throw new ConflictException(
+        'This workspace still has a plan. Cancel it from the account page — you can delete the workspace once it has ended.',
+      );
+    }
+
+    const [pages, layouts, templates, domains] = await Promise.all([
+      this.pagesService.removeAllForOrg(orgId),
+      this.layoutsService.removeAllForOrg(orgId),
+      this.templatesService.removeAllForOrg(orgId),
+      this.domainsService.removeAllForOrg(orgId),
+    ]);
+    await this.inviteModel
+      .deleteMany({ org: orgId, acceptedAt: { $exists: false } })
+      .exec();
+
+    const memberIds = org.members.map((m) => String(m.user));
+    await this.orgsService.markDeleted(org, actorId);
+    for (const userId of memberIds) {
+      await this.resetActiveOrgIfOn(orgId, userId);
+    }
+
+    this.logger.log(
+      `Org ${orgId} deleted by ${actorId}: ${memberIds.length} members detached, ` +
+        `${pages} pages, ${layouts} layouts, ${templates} templates, ${domains} domains removed`,
+    );
+    return { access_token: await this.authService.issueSessionToken(actorId) };
+  }
+
   // --- helpers -------------------------------------------------------------
 
   /**
@@ -367,6 +435,11 @@ export class TeamsService {
    */
   private async detach(orgId: string, userId: string): Promise<void> {
     await this.orgsService.removeMember(orgId, userId);
+    await this.resetActiveOrgIfOn(orgId, userId);
+    this.logger.log(`User ${userId} removed from org ${orgId}`);
+  }
+
+  private async resetActiveOrgIfOn(orgId: string, userId: string): Promise<void> {
     const user = await this.usersService.findById(userId);
     if (user && String(user.activeOrg) === orgId) {
       const personal = await this.orgsService.findPersonalOrg(userId);
@@ -374,7 +447,6 @@ export class TeamsService {
         await this.usersService.updateActiveOrg(userId, String(personal._id));
       }
     }
-    this.logger.log(`User ${userId} removed from org ${orgId}`);
   }
 
   /**

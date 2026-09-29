@@ -5,6 +5,10 @@ import { OrgsModule } from '../orgs/orgs.module';
 import { UsersModule } from '../users/users.module';
 import { PlansModule } from '../plans/plans.module';
 import { AuthModule } from '../auth/auth.module';
+import { PagesModule } from '../pages/pages.module';
+import { LayoutsModule } from '../layouts/layouts.module';
+import { TemplatesModule } from '../templates/templates.module';
+import { DomainsModule } from '../domains/domains.module';
 import { teamProviders } from './teams.providers';
 import { TeamsService } from './teams.service';
 import { InvitesController, TeamsController } from './teams.controller';
@@ -17,6 +21,11 @@ import { InvitesController, TeamsController } from './teams.controller';
     UsersModule,
     PlansModule,
     AuthModule,
+    // Deleting a team workspace takes its content with it.
+    PagesModule,
+    LayoutsModule,
+    TemplatesModule,
+    DomainsModule,
   ],
   controllers: [TeamsController, InvitesController],
   providers: [

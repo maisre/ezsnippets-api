@@ -160,3 +160,22 @@ describe('DomainsService.resolveServable', () => {
     expect(r.ok).toBe(true);
   });
 });
+
+describe('DomainsService.assertCanManage', () => {
+  const serviceWithRole = (role: string | null) =>
+    new DomainsService(
+      {} as any,
+      { getMemberRole: jest.fn().mockResolvedValue(role) } as any,
+      {} as any,
+    );
+
+  it.each(['owner', 'admin'])('allows a %s', async (role) => {
+    await expect(serviceWithRole(role).assertCanManage('o', 'u')).resolves.toBeUndefined();
+  });
+
+  it.each(['member', null])('refuses %s', async (role) => {
+    await expect(serviceWithRole(role).assertCanManage('o', 'u')).rejects.toThrow(
+      'Only the workspace owner or an admin',
+    );
+  });
+});

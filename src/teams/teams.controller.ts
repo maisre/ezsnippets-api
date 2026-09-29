@@ -19,8 +19,9 @@ import { TeamsService } from './teams.service';
 // No global ValidationPipe in this service — bodies arrive exactly as sent, and
 // TeamsService validates every field it reads.
 //
-// Every route here is two or more segments under /orgs/:id, so none can shadow
-// OrgsController's literal /orgs/favorites routes.
+// Every route here is under /orgs/:id and none can shadow OrgsController's
+// literal /orgs/favorites routes: the only one-segment route is DELETE, and
+// OrgsController has no DELETE /orgs/favorites.
 @Controller('orgs/:id')
 @UseGuards(JwtAuthGuard)
 export class TeamsController {
@@ -79,6 +80,23 @@ export class TeamsController {
     @Request() req,
   ) {
     await this.teamsService.removeMember(orgId, req.user.userId, userId);
+  }
+
+  // Same token hand-back as leave: the caller's token names the deleted org.
+  @Delete()
+  async deleteTeam(
+    @Param('id') orgId: string,
+    @Body() body: { confirmName?: string },
+    @Request() req,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.teamsService.deleteTeam(
+      orgId,
+      req.user.userId,
+      body?.confirmName,
+    );
+    res.cookie(SESSION_COOKIE, result.access_token, sessionCookieOptions());
+    return result;
   }
 
   // The caller's token names this org, so it dies with their membership; hand

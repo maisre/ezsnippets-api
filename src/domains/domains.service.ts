@@ -119,6 +119,26 @@ export class DomainsService {
     }
   }
 
+  /**
+   * Adding or removing a domain changes where the team's work is served, so
+   * in a team workspace it's owner/admin only. Members can still see the
+   * domains and re-run the DNS check.
+   */
+  async assertCanManage(orgId: string, userId: string): Promise<void> {
+    const role = await this.orgsService.getMemberRole(orgId, userId);
+    if (role !== 'owner' && role !== 'admin') {
+      throw new ForbiddenException(
+        'Only the workspace owner or an admin can add or remove custom domains.',
+      );
+    }
+  }
+
+  /** Hard delete — frees the hostnames for whoever connects them next. */
+  async removeAllForOrg(orgId: string): Promise<number> {
+    const res = await this.domainModel.deleteMany({ org: orgId }).exec();
+    return res.deletedCount;
+  }
+
   async remove(id: string, orgId: string): Promise<void> {
     const result = await this.domainModel
       .findOneAndDelete({ _id: id, org: orgId })

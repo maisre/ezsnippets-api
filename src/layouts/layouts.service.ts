@@ -946,6 +946,17 @@ export class LayoutsService {
     return updatedLayout;
   }
 
+  /** Soft-delete every layout in an org (team workspace deletion). */
+  async removeAllForOrg(orgId: string): Promise<number> {
+    const res = await this.layoutModel
+      .updateMany(
+        { org: orgId, deletedAt: null },
+        { $set: { deletedAt: new Date() } },
+      )
+      .exec();
+    return res.modifiedCount;
+  }
+
   // Soft delete: the document is kept so it can be recovered manually, but it
   // is hidden from every read path and drops out of the plan count.
   async remove(id: string, orgId: string): Promise<void> {

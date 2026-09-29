@@ -889,6 +889,29 @@ export class PagesService {
     return updatedPage;
   }
 
+  /** Soft-delete every page in an org (team workspace deletion). */
+  async removeAllForOrg(orgId: string): Promise<number> {
+    const live = await this.pageModel
+      .find({ org: orgId, deletedAt: null })
+      .select('_id')
+      .lean()
+      .exec();
+    if (!live.length) return 0;
+    await this.pageModel
+      .updateMany(
+        { _id: { $in: live.map((p) => p._id) } },
+        { $set: { deletedAt: new Date() } },
+      )
+      .exec();
+    for (const p of live) {
+      await this.pubsub.publish('page-updates', {
+        action: 'updated',
+        roomId: String(p._id),
+      });
+    }
+    return live.length;
+  }
+
   // Soft delete: the document is kept so it can be recovered manually, but it
   // is hidden from every read path and drops out of the plan count.
   async remove(id: string, orgId: string): Promise<void> {

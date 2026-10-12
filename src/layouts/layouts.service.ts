@@ -49,6 +49,13 @@ function toSnippetRef(value: any): any | null {
   return null;
 }
 
+// Every layout starts with one real, saved subpage. The editor used to show
+// an unsaved placeholder for an empty layout, so the first template insert or
+// scratch-pad restore failed with "no subpage at position 0".
+function defaultSubPages() {
+  return [{ name: 'Home', snippets: [] }];
+}
+
 @Injectable()
 export class LayoutsService {
   private readonly logger = new Logger(LayoutsService.name);
@@ -113,7 +120,9 @@ export class LayoutsService {
       description: createLayoutDto.description,
       nav: createLayoutDto.nav,
       footer: createLayoutDto.footer,
-      subPages: createLayoutDto.subPages || [],
+      subPages: createLayoutDto.subPages?.length
+        ? createLayoutDto.subPages
+        : defaultSubPages(),
       org: new Types.ObjectId(orgId),
       createdBy: new Types.ObjectId(userId),
     };
@@ -1022,10 +1031,12 @@ export class LayoutsService {
       description: dto.description?.trim() || template.description,
       nav: template.nav ? { id: template.nav } : undefined,
       footer: template.footer ? { id: template.footer } : undefined,
-      subPages: (template.subPages ?? []).map((sp) => ({
-        name: sp.name,
-        snippets: (sp.snippetIds ?? []).map((id) => ({ id })),
-      })),
+      subPages: template.subPages?.length
+        ? template.subPages.map((sp) => ({
+            name: sp.name,
+            snippets: (sp.snippetIds ?? []).map((id) => ({ id })),
+          }))
+        : defaultSubPages(),
       org: new Types.ObjectId(orgId),
       createdBy: new Types.ObjectId(userId),
     });

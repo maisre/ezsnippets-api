@@ -114,6 +114,16 @@ async function settle(page) {
   // arrive after load; shooting before they swap in captures fallback glyphs
   // and the wrong metrics.
   await page.evaluate(() => document.fonts.ready).catch(() => {});
+  // Entrance animations that run on load (`animation: fadeInUp 1s forwards
+  // 1.4s`) start at opacity 0 and aren't driven by scrolling, so the walk above
+  // doesn't settle them. Wait for every finite one to finish, capped so a
+  // stalled animation can't hang the run.
+  await page.evaluate(() => Promise.race([
+    Promise.all(document.getAnimations()
+      .filter((a) => a.effect && a.effect.getComputedTiming().iterations !== Infinity)
+      .map((a) => a.finished.catch(() => {}))),
+    new Promise((r) => setTimeout(r, 4000)),
+  ])).catch(() => {});
 }
 
 /**

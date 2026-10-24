@@ -43,6 +43,7 @@ export class AppController {
     const result = await this.authService.signup(
       signupDto.email,
       signupDto.password,
+      signupDto.acquisition,
     );
     res.cookie(SESSION_COOKIE, result.access_token, sessionCookieOptions());
     return result;

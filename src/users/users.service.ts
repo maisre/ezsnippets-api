@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { Model, Types } from 'mongoose';
 import { User } from './interfaces/user.interface';
+import { Acquisition } from '../auth/acquisition';
 
 @Injectable()
 export class UsersService {
@@ -23,8 +24,16 @@ export class UsersService {
     return this.userModel.find({ _id: { $in: ids } }).select('email').exec();
   }
 
-  async create(email: string, hashedPassword: string): Promise<User> {
-    const user = new this.userModel({ email, password: hashedPassword });
+  async create(
+    email: string,
+    hashedPassword: string,
+    acquisition?: Acquisition,
+  ): Promise<User> {
+    const user = new this.userModel({
+      email,
+      password: hashedPassword,
+      ...(acquisition && { acquisition }),
+    });
     return user.save();
   }
 

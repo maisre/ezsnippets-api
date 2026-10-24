@@ -15,4 +15,25 @@ export const UserSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  // Where they came from — set once at signup, never updated. See
+  // src/auth/acquisition.ts.
+  acquisition: {
+    type: new mongoose.Schema(
+      {
+        utmSource: String,
+        utmMedium: String,
+        utmCampaign: String,
+        utmContent: String,
+        utmTerm: String,
+        ref: String,
+        referrer: String,
+        landingPath: String,
+        firstSeenAt: Date,
+        heardAbout: String,
+        heardAboutDetail: String,
+      },
+      { _id: false },
+    ),
+    required: false,
+  },
 });

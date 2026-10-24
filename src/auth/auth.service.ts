@@ -12,6 +12,7 @@ import { UsersService } from '../users/users.service';
 import { OrgsService } from '../orgs/orgs.service';
 import { isWorkspaceOpen } from '../plans/subscription-status';
 import { SqsService } from '../sqs/sqs.service';
+import { sanitizeAcquisition } from './acquisition';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
@@ -46,14 +47,18 @@ export class AuthService {
     return null;
   }
 
-  async signup(email: string, password: string) {
+  async signup(email: string, password: string, acquisition?: unknown) {
     const existing = await this.usersService.findByEmail(email);
     if (existing) {
       throw new ConflictException('An account with this email already exists');
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const user = await this.usersService.create(email, hashedPassword);
+    const user = await this.usersService.create(
+      email,
+      hashedPassword,
+      sanitizeAcquisition(acquisition),
+    );
 
     const org = await this.orgsService.createPersonalOrg(
       String(user._id),

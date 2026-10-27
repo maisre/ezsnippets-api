@@ -1,4 +1,6 @@
-import { ServiceUnavailableException } from '@nestjs/common';
+import { Logger, ServiceUnavailableException } from '@nestjs/common';
+
+const logger = new Logger('SiteExport');
 import JSZip from 'jszip';
 import { slugify as toSlug } from '../common/slugify';
 
@@ -21,6 +23,9 @@ export async function exportSiteZip(
 ): Promise<{ buffer: Buffer; filename: string }> {
   const res = await fetch(opts.renderUrl);
   if (!res.ok) {
+    // A 503 to the browser isn't reported to Sentry, so this line is the only
+    // record of why. (A 404 here once meant ez-view rejected the internal Host.)
+    logger.error(`Export render failed: ${res.status} from ${opts.renderUrl}`);
     throw new ServiceUnavailableException('Could not render the content for export');
   }
   let html = await res.text();

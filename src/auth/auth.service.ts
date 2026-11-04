@@ -18,6 +18,10 @@ import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000;
+// Reset emails per account per hour. The route's per-IP limit doesn't stop
+// someone rotating IPs to flood one person's inbox; this does. Over the cap
+// the request still answers 204, so it reveals nothing.
+const MAX_RESETS_PER_HOUR = 3;
 
 @Injectable()
 export class AuthService {
@@ -48,6 +52,8 @@ export class AuthService {
   }
 
   async signup(email: string, password: string, acquisition?: unknown) {
+    // findByEmail ignores case, so Foo@x.com can't open a second account for
+    // foo@x.com's inbox; create() stores the email normalised.
     const existing = await this.usersService.findByEmail(email);
     if (existing) {
       throw new ConflictException('An account with this email already exists');
@@ -163,6 +169,17 @@ export class AuthService {
       return;
     }
 
+    const recent = await this.passwordResetModel
+      .countDocuments({
+        user: user._id,
+        createdAt: { $gte: new Date(Date.now() - 60 * 60 * 1000) },
+      })
+      .exec();
+    if (recent >= MAX_RESETS_PER_HOUR) {
+      this.logger.warn(`Reset email cap reached for user ${String(user._id)}`);
+      return;
+    }
+
     const rawToken = crypto.randomBytes(32).toString('base64url');
     const tokenHash = crypto
       .createHash('sha256')
@@ -178,7 +195,13 @@ export class AuthService {
 
     const resetUrl = `${this.frontendUrl}/reset-password?token=${rawToken}`;
 
-    this.logger.log(`Password reset requested for ${email}: ${resetUrl}`);
+    // The link is a credential. Only log it against LocalStack, where no real
+    // email is sent. (NODE_ENV isn't set on the prod box, so it can't be the
+    // signal here.)
+    this.logger.log(
+      `Password reset requested for user ${String(user._id)}` +
+        (process.env.AWS_ENDPOINT_URL ? `: ${resetUrl}` : ''),
+    );
 
     await this.sqsService.sendMessage(this.emailQueueUrl, {
       type: 'password_reset_email',

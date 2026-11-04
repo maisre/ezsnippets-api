@@ -11,6 +11,14 @@ env:
   ECR_REPOSITORY: ez-api
   SERVICE: ez-api
 
+# One run at a time: two overlapping runs race on the box (deploy.sh rewrites
+# .env and runs compose). Queued runs wait rather than cancel a deploy midway.
+# GitHub scopes this group to the repo, so it does not serialize against
+# deploys from the other service repos.
+concurrency:
+  group: ez-box
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

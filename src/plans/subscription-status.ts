@@ -12,6 +12,14 @@ type SubscriptionFields = {
   billingBlocked?: boolean;
   personal?: boolean;
   scheduledDowngrade?: { until?: Date | string | null; productId?: string } | null;
+  productId?: string;
+  subscriptionId?: string;
+  scheduledSwitch?: {
+    subscriptionId?: string;
+    until?: Date | string | null;
+    productId?: string;
+    toProductId?: string;
+  } | null;
 };
 
 // Type predicate: a true result also means `plan` is set, which is what the
@@ -43,6 +51,24 @@ export function downgradeGraceProductId(
 ): string | undefined {
   const grace = org?.scheduledDowngrade;
   if (!grace?.until || !grace.productId || org?.billingBlocked) return undefined;
+  return new Date(grace.until).getTime() > now ? grace.productId : undefined;
+}
+
+/**
+ * The tier a subscriber who moved to a cheaper single-seat plan has already
+ * paid for, until the period ends (see ScheduledSwitch). Only while that same
+ * subscription is still live and still on the product the switch moved it
+ * to — if anything else has changed it since, the org's own product wins.
+ */
+export function switchGraceProductId(
+  org: SubscriptionFields | null | undefined,
+  now = Date.now(),
+): string | undefined {
+  const grace = org?.scheduledSwitch;
+  if (!grace?.until || !grace.productId || !hasActiveSubscription(org)) return undefined;
+  if (grace.subscriptionId !== org.subscriptionId || grace.toProductId !== org.productId) {
+    return undefined;
+  }
   return new Date(grace.until).getTime() > now ? grace.productId : undefined;
 }
 

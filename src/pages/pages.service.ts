@@ -93,7 +93,7 @@ export class PagesService {
   }
 
   async create(createPageDto: CreatePageDto, orgId: string, userId: string): Promise<Page> {
-    await this.enforceLimit(orgId);
+    const limit = await this.enforceLimit(orgId);
 
     const pageData = {
       name: createPageDto.name,
@@ -105,7 +105,7 @@ export class PagesService {
     };
 
     const createdPage = new this.pageModel(pageData);
-    return createdPage.save();
+    return this.saveWithinLimit(createdPage, orgId, limit);
   }
 
   // Duplicate an existing page within the caller's active org. Enforces, in
@@ -124,7 +124,7 @@ export class PagesService {
       throw new NotFoundException(`Page with id ${id} not found`);
     }
 
-    await this.enforceLimit(orgId);
+    const limit = await this.enforceLimit(orgId);
 
     // Strip subdocument _ids so the copied snippets get fresh ones.
     const snippets = (source.toObject().snippets || []).map(
@@ -139,7 +139,7 @@ export class PagesService {
       org: new Types.ObjectId(orgId),
       createdBy: new Types.ObjectId(userId),
     });
-    return createdPage.save();
+    return this.saveWithinLimit(createdPage, orgId, limit);
   }
 
   async update(
@@ -451,7 +451,11 @@ export class PagesService {
     // In onlyMissing mode we touch only snippets that were never AI-customized
     // (e.g. ones added after an earlier customize run), leaving the rest — and
     // their existing overrides — untouched.
-    const shouldDo = (sa: any) => !options.onlyMissing || sa.aiCustomized !== true;
+    // Hand-edited snippets (any text override) count as done too: the editor
+    // shows them as having text, and re-running AI would overwrite the edits.
+    const shouldDo = (sa: any) =>
+      !options.onlyMissing ||
+      (sa.aiCustomized !== true && !sa.textReplacementOverride?.length);
 
     // Load all referenced snippets (parallel to page.snippets by index).
     const snippetDocs = await Promise.all(
@@ -865,8 +869,9 @@ export class PagesService {
       throw new NotFoundException(`Page with id ${id} not found`);
     }
 
+    let restoreLimit = -1;
     if (!archived && page.status === 'archived') {
-      await this.enforceLimit(orgId);
+      restoreLimit = await this.enforceLimit(orgId);
     }
 
     const updatedPage = await this.pageModel
@@ -879,6 +884,20 @@ export class PagesService {
 
     if (!updatedPage) {
       throw new NotFoundException(`Page with id ${id} not found`);
+    }
+
+    // Same race as saveWithinLimit: parallel restores each pass the check.
+    // Undo this one if the org is now over its cap.
+    if (
+      restoreLimit !== -1 &&
+      (await this.countForOrg(orgId)) > restoreLimit
+    ) {
+      await this.pageModel
+        .updateOne({ _id: id, org: orgId }, { $set: { status: 'archived' } })
+        .exec();
+      throw new ForbiddenException(
+        `Page limit reached (${restoreLimit}). Upgrade your plan to restore more pages.`,
+      );
     }
 
     // Archiving takes the page offline in ez-view; tell any connected viewers.
@@ -974,7 +993,7 @@ export class PagesService {
       );
     }
 
-    await this.enforceLimit(orgId);
+    const limit = await this.enforceLimit(orgId);
 
     const createdPage = new this.pageModel({
       name: dto.name?.trim() || template.name,
@@ -985,7 +1004,7 @@ export class PagesService {
       createdBy: new Types.ObjectId(userId),
     });
 
-    return createdPage.save();
+    return this.saveWithinLimit(createdPage, orgId, limit);
   }
 
   /**
@@ -1049,7 +1068,8 @@ export class PagesService {
       .aiDailyLimit;
   }
 
-  private async enforceLimit(orgId: string): Promise<void> {
+  /** Throws if the org is at its page limit; returns the limit (-1 = none). */
+  private async enforceLimit(orgId: string): Promise<number> {
     const org = await this.orgsService.findOne(orgId);
     const entitlement = await this.plansService.entitlementFor(org);
     if (!entitlement) {
@@ -1059,7 +1079,7 @@ export class PagesService {
     }
 
     const { limits } = entitlement;
-    if (limits.maxPages === -1) return; // Unlimited
+    if (limits.maxPages === -1) return -1; // Unlimited
 
     const current = await this.countForOrg(orgId);
     if (current >= limits.maxPages) {
@@ -1067,5 +1087,33 @@ export class PagesService {
         `Page limit reached (${limits.maxPages}). Upgrade your plan to create more pages.`,
       );
     }
+    return limits.maxPages;
+  }
+
+  /**
+   * Save a new page that enforceLimit has already admitted, then make sure it
+   * still fits. The check-then-insert above is not atomic: parallel requests
+   * each see room and all insert. Counting only pages created no later than
+   * this one (ObjectIds sort by creation) means the first `limit` survive and
+   * every later racer removes itself.
+   */
+  private async saveWithinLimit(doc: any, orgId: string, limit: number) {
+    const saved = await doc.save();
+    if (limit === -1) return saved;
+    const upToThis = await this.pageModel
+      .countDocuments({
+        org: orgId,
+        status: { $ne: 'archived' },
+        deletedAt: null,
+        _id: { $lte: saved._id },
+      })
+      .exec();
+    if (upToThis > limit) {
+      await this.pageModel.deleteOne({ _id: saved._id }).exec();
+      throw new ForbiddenException(
+        `Page limit reached (${limit}). Upgrade your plan to create more pages.`,
+      );
+    }
+    return saved;
   }
 }

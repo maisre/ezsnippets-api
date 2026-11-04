@@ -12,6 +12,7 @@ import {
 import {
   downgradeGraceProductId,
   hasActiveSubscription,
+  switchGraceProductId,
 } from './subscription-status';
 import { OrgsService } from '../orgs/orgs.service';
 import type { Org } from '../orgs/interfaces/org.interface';
@@ -57,9 +58,11 @@ export class PlansService {
     if (!org) return null;
 
     if (hasActiveSubscription(org)) {
+      // A switch down to a cheaper plan keeps the paid-up tier until renewal.
+      const productId = switchGraceProductId(org) ?? org.productId;
       return {
-        plan: this.planName(org.productId),
-        limits: this.getLimits(org.productId),
+        plan: this.planName(productId),
+        limits: this.getLimits(productId),
         source: 'subscription',
       };
     }

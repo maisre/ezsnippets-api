@@ -1,3 +1,4 @@
+import { isEmail } from 'class-validator';
 import {
   BadRequestException,
   ConflictException,
@@ -34,8 +35,6 @@ const GRANTABLE_ROLES: Role[] = ['admin', 'member'];
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_NAME_LENGTH = 80;
 // Deliberately loose: the real check is that the invitee can sign in with it.
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 export interface TeamView {
   org: { id: string; name: string; personal: boolean };
   myRole: Role;
@@ -198,10 +197,11 @@ export class TeamsService {
       acceptUrl,
     });
     // The link is a credential, so it's only logged where there's no real
-    // mail delivery to test with.
+    // mail delivery to test with. AWS_ENDPOINT_URL is set only for LocalStack;
+    // NODE_ENV is never set on the prod box, so it logged links there.
     this.logger.log(
       `Invite ${invite._id} ${pending ? 're-issued' : 'sent'} to ${email} for org ${orgId}` +
-        (process.env.NODE_ENV === 'production' ? '' : `: ${acceptUrl}`),
+        (process.env.AWS_ENDPOINT_URL ? `: ${acceptUrl}` : ''),
     );
 
     return {
@@ -278,8 +278,23 @@ export class TeamsService {
       );
     }
 
+    // Seats are checked when inviting, but parallel invites can each pass that
+    // check, so the member list itself is capped here too.
+    const alreadyMember = org.members.some((m) => String(m.user) === userId);
+    const maxSeats = (await this.plansService.entitlementFor(org))?.limits
+      .maxSeats;
     // Null when they're already a member — accept is then just a switch.
-    const joined = await this.orgsService.addMember(orgId, userId, invite.role);
+    const joined = await this.orgsService.addMember(
+      orgId,
+      userId,
+      invite.role,
+      maxSeats,
+    );
+    if (!joined && !alreadyMember) {
+      throw new ForbiddenException(
+        `This team is full (${maxSeats} seats). Ask the owner to free a seat, then accept again.`,
+      );
+    }
     await this.inviteModel
       .updateOne(
         { _id: invite._id },
@@ -610,7 +625,11 @@ function hashToken(raw: string): string {
 
 function normalizeEmail(raw: unknown): string {
   const email = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
-  if (!EMAIL_RE.test(email)) throw new BadRequestException('A valid email is required');
+  // The address is shown in the invite email, so it must be a real address,
+  // not anything containing an @ (`<a href=…>@x.com` passed the old regex).
+  if (email.length > 254 || !isEmail(email)) {
+    throw new BadRequestException('A valid email is required');
+  }
   return email;
 }
 

@@ -39,6 +39,10 @@ export function normalizeHostname(input: string): string {
  * never issues a certificate.
  */
 export function validateHostname(input: string): HostnameCheck {
+  // ez-api has no ValidationPipe, so the body can carry any JSON type here.
+  if (typeof input !== 'string') {
+    return { ok: false, reason: 'Enter a domain.' };
+  }
   const host = normalizeHostname(input);
 
   if (!host) {

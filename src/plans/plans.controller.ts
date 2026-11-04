@@ -41,7 +41,14 @@ export class PlansController {
     // paddleCustomerId is returned either way: it identifies who the customer
     // is, not what they're entitled to. Paddle.js needs it as `pwCustomer` for
     // Retain, and a lapsed customer is exactly who Retain wants to win back.
-    const paddleCustomerId = org?.paddleCustomerId ?? null;
+    //
+    // Owner only, matching GET /orgs: a team member's Paddle.js would
+    // otherwise run Retain as the owner's customer — billing prompts shown to
+    // someone who can't act on them.
+    const isOwner = !!org?.members.some(
+      (m) => String(m.user) === req.user.userId && m.role === 'owner',
+    );
+    const paddleCustomerId = isOwner ? (org?.paddleCustomerId ?? null) : null;
 
     const entitlement = await this.plansService.entitlementFor(org);
     if (!org || !entitlement) {

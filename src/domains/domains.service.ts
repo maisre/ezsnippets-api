@@ -8,7 +8,7 @@ import {
   NotFoundException,
   forwardRef,
 } from '@nestjs/common';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { promises as dns } from 'dns';
 import { CustomDomain } from './interfaces/custom-domain.interface';
 import { normalizeHostname, validateHostname } from './hostname-rules';
@@ -88,7 +88,7 @@ export class DomainsService {
     }
     const hostname = normalizeHostname(rawHostname);
 
-    await this.enforceLimit(orgId);
+    const limit = await this.enforceLimit(orgId);
 
     // Claimed by anyone — including this org — is a conflict. The unique index
     // is the real guard against a race; this is just the friendly message.
@@ -106,6 +106,19 @@ export class DomainsService {
         createdBy: userId,
         status: 'pending',
       });
+      // enforceLimit is check-then-insert, so parallel adds can all pass it.
+      // Keep only the first `limit` (ObjectIds sort by creation).
+      if (limit !== -1) {
+        const upToThis = await this.domainModel
+          .countDocuments({ org: orgId, _id: { $lte: created._id } })
+          .exec();
+        if (upToThis > limit) {
+          await this.domainModel.deleteOne({ _id: created._id }).exec();
+          throw new ForbiddenException(
+            `Custom domain limit reached (${limit}). Upgrade your plan to connect more.`,
+          );
+        }
+      }
       // Check immediately: if they set the CNAME up before adding it here (a
       // common order), this goes straight to active and skips the waiting.
       return await this.verify(String(created.id), orgId);
@@ -140,6 +153,7 @@ export class DomainsService {
   }
 
   async remove(id: string, orgId: string): Promise<void> {
+    if (!Types.ObjectId.isValid(id)) throw new NotFoundException('Domain not found');
     const result = await this.domainModel
       .findOneAndDelete({ _id: id, org: orgId })
       .exec();
@@ -157,6 +171,7 @@ export class DomainsService {
    * customer to get wrong without proving anything the CNAME doesn't.
    */
   async verify(id: string, orgId?: string): Promise<CustomDomain> {
+    if (!Types.ObjectId.isValid(id)) throw new NotFoundException('Domain not found');
     const filter: any = orgId ? { _id: id, org: orgId } : { _id: id };
     const domain = await this.domainModel.findOne(filter).exec();
     if (!domain) {
@@ -366,6 +381,7 @@ export class DomainsService {
    * it reflects the customer's DNS as it is right now, not as of the last sweep.
    */
   async diagnose(id: string, orgId: string) {
+    if (!Types.ObjectId.isValid(id)) throw new NotFoundException('Domain not found');
     const domain = await this.domainModel
       .findOne({ _id: id, org: orgId })
       .exec();
@@ -468,7 +484,8 @@ export class DomainsService {
    * Mirrors PagesService.enforceLimit — same subscription gate, same
    * unlimited sentinel, same upgrade-shaped message.
    */
-  private async enforceLimit(orgId: string): Promise<void> {
+  /** Throws if the org can't add a domain; returns the limit (-1 = none). */
+  private async enforceLimit(orgId: string): Promise<number> {
     const org = await this.orgsService.findOne(orgId);
     const entitlement = await this.plansService.entitlementFor(org);
     if (!entitlement) {
@@ -478,7 +495,7 @@ export class DomainsService {
     }
 
     const { limits } = entitlement;
-    if (limits.maxCustomDomains === -1) return; // Unlimited
+    if (limits.maxCustomDomains === -1) return -1; // Unlimited
     if (limits.maxCustomDomains === 0) {
       throw new ForbiddenException(
         'Custom domains are available on the Pro and Agency plans. Upgrade to connect one.',
@@ -491,5 +508,6 @@ export class DomainsService {
         `Custom domain limit reached (${limits.maxCustomDomains}). Upgrade your plan to connect more.`,
       );
     }
+    return limits.maxCustomDomains;
   }
 }

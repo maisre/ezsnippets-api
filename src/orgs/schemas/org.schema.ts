@@ -74,6 +74,25 @@ export const OrgSchema = new mongoose.Schema(
       ),
       default: undefined,
     },
+    // See ScheduledSwitch in org.interface.ts. Like scheduledDowngrade, kept
+    // after it lapses; entitlement only reads it while `until` is ahead.
+    scheduledSwitch: {
+      type: new mongoose.Schema(
+        {
+          subscriptionId: { type: String, required: true },
+          until: { type: Date, required: true },
+          productId: { type: String, required: true },
+          priceId: { type: String, required: true },
+          toProductId: { type: String, required: true },
+          toPriceId: { type: String, required: true },
+          scheduledAt: { type: Date },
+        },
+        { _id: false },
+      ),
+      default: undefined,
+    },
+    // See Org.trialUsedAt in org.interface.ts.
+    trialUsedAt: { type: Date },
     // Local mirror of Paddle adjustments (refunds, credits, chargebacks) so
     // billing questions can be answered from the org doc instead of the Paddle
     // dashboard. Paddle remains the system of record. Capped at the most recent

@@ -49,6 +49,36 @@ export class PaymentsController {
     );
   }
 
+  // The caller's single-seat subscription, any scheduled switch, and whether
+  // a checkout would include the free trial — for the pricing/account pages.
+  @UseGuards(JwtAuthGuard)
+  @Get('billing-state')
+  async billingState(@Request() req) {
+    return this.paymentService.billingState(req.user.userId);
+  }
+
+  // Single-seat plan changes (Starter <-> Pro, monthly -> yearly) on the
+  // caller's personal subscription. Preview first; the change re-derives
+  // everything server-side.
+  @UseGuards(JwtAuthGuard)
+  @Post('plan-change/preview')
+  async previewPlanChange(@Request() req, @Body() body: { priceId: string }) {
+    return this.paymentService.previewPlanChange(req.user.userId, body?.priceId);
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Post('plan-change')
+  async changePlan(@Request() req, @Body() body: { priceId: string }) {
+    return this.paymentService.changePlan(req.user.userId, body?.priceId);
+  }
+
+  // Undo a scheduled switch to a cheaper plan.
+  @UseGuards(JwtAuthGuard)
+  @Delete('plan-change')
+  async cancelPlanSwitch(@Request() req) {
+    return this.paymentService.cancelPlanSwitch(req.user.userId);
+  }
+
   // Team -> single-seat downgrade. Owner-only, enforced in the service. Keyed
   // by the team's id rather than the caller's activeOrg so the owner can
   // manage it from wherever they are.

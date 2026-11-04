@@ -12,6 +12,9 @@ import { canEditPage } from '../auth/edit-access';
 import { PagesService } from '../pages/pages.service';
 import { UploadsService } from './uploads.service';
 
+// Each key is one S3 call, fired in parallel.
+const MAX_COMMIT_KEYS = 200;
+
 @UseGuards(JwtAuthGuard)
 @Controller('uploads')
 export class UploadsController {
@@ -47,8 +50,15 @@ export class UploadsController {
   // Called by the client after it persists content referencing the images.
   @Post('commit')
   async commit(@Request() req, @Body() body: { keys?: string[] }) {
-    if (!Array.isArray(body?.keys) || body.keys.length === 0) {
-      throw new BadRequestException('keys must be a non-empty array');
+    if (
+      !Array.isArray(body?.keys) ||
+      body.keys.length === 0 ||
+      body.keys.length > MAX_COMMIT_KEYS ||
+      !body.keys.every((k) => typeof k === 'string')
+    ) {
+      throw new BadRequestException(
+        `keys must be a non-empty array of at most ${MAX_COMMIT_KEYS} strings`,
+      );
     }
     const saved = await this.uploadsService.markSaved(
       req.user.activeOrg,

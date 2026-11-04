@@ -11,6 +11,7 @@ import {
   Org,
   OrgMember,
   ScheduledDowngrade,
+  ScheduledSwitch,
 } from './interfaces/org.interface';
 import { FAVORITE_SNIPPETS_LIMIT, FAVORITES_FULL_MESSAGE } from './favorites';
 
@@ -82,11 +83,20 @@ export class OrgsService {
     orgId: string,
     userId: string,
     role: OrgMember['role'],
+    maxSeats?: number,
   ): Promise<Org | null> {
-    // Guarded so accepting the same invite twice can't add a second row.
+    // Guarded so accepting the same invite twice can't add a second row, and
+    // — when maxSeats is given — so parallel accepts can't push the member
+    // list past the plan's seats (the filter fails once that index exists).
     return this.orgModel
       .findOneAndUpdate(
-        { _id: orgId, 'members.user': { $ne: new Types.ObjectId(userId) } },
+        {
+          _id: orgId,
+          'members.user': { $ne: new Types.ObjectId(userId) },
+          ...(maxSeats && maxSeats > 0
+            ? { [`members.${maxSeats - 1}`]: { $exists: false } }
+            : {}),
+        },
         { $push: { members: { user: new Types.ObjectId(userId), role } } },
         { new: true },
       )
@@ -189,6 +199,7 @@ export class OrgsService {
     'currentPeriodEnd',
     'cancelAtPeriodEnd',
     'subscriptionEventAt',
+    'scheduledSwitch',
   ] as const;
 
   async clearSubscription(orgId: string): Promise<Org | null> {
@@ -251,6 +262,31 @@ export class OrgsService {
   ): Promise<Org | null> {
     return this.orgModel
       .findByIdAndUpdate(orgId, { $set: { scheduledDowngrade: downgrade } }, { new: true })
+      .exec();
+  }
+
+  async setScheduledSwitch(
+    orgId: string,
+    change: ScheduledSwitch,
+  ): Promise<Org | null> {
+    return this.orgModel
+      .findByIdAndUpdate(orgId, { $set: { scheduledSwitch: change } }, { new: true })
+      .exec();
+  }
+
+  async clearScheduledSwitch(orgId: string): Promise<Org | null> {
+    return this.orgModel
+      .findByIdAndUpdate(orgId, { $unset: { scheduledSwitch: 1 } }, { new: true })
+      .exec();
+  }
+
+  /** Stamps trialUsedAt on each org that doesn't have it yet; never moves it. */
+  async markTrialUsed(orgIds: string[], at = new Date()): Promise<void> {
+    await this.orgModel
+      .updateMany(
+        { _id: { $in: orgIds }, trialUsedAt: { $exists: false } },
+        { $set: { trialUsedAt: at } },
+      )
       .exec();
   }
 

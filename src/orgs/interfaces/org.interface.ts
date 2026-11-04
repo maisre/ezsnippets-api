@@ -52,6 +52,29 @@ export interface ScheduledDowngrade {
   scheduledAt: Date;
 }
 
+/**
+ * Left on a personal org when its owner moves to a cheaper single-seat plan
+ * (Pro -> Starter). Paddle can't schedule an item change, so the subscription
+ * is already on the cheaper price (`do_not_bill`: no charge, no credit, the next
+ * renewal bills it); this keeps the tier already paid for until `until`. Only
+ * honoured while the same subscription is still on `toProductId` — if anything
+ * else changes it, the grace no longer applies. See PaymentsService.changePlan.
+ */
+export interface ScheduledSwitch {
+  /** Only this subscription carries the grace — a later one never inherits it. */
+  subscriptionId: string;
+  /** End of the paid-up period. */
+  until: Date;
+  /** The tier paid for this period, kept until `until`. */
+  productId: string;
+  /** The price it was on, so "keep my plan" can put it back exactly. */
+  priceId: string;
+  /** What the subscription moved to. */
+  toProductId: string;
+  toPriceId: string;
+  scheduledAt: Date;
+}
+
 export interface Org extends Document {
   readonly name: string;
   readonly personal: boolean;
@@ -86,4 +109,11 @@ export interface Org extends Document {
    * subscription. See TeamsService.transferOwnership.
    */
   billingPayerId?: Types.ObjectId;
+  scheduledSwitch?: ScheduledSwitch;
+  /**
+   * When this org first got a Paddle subscription. Stamped on the billed org
+   * and on its owner's personal org, and never cleared — it's how a free
+   * trial is limited to once per customer. See PaymentsService.hasHadSubscription.
+   */
+  trialUsedAt?: Date;
 }

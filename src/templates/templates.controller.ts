@@ -9,6 +9,7 @@ import {
   Query,
   Request,
   UseGuards,
+  NotFoundException,
 } from '@nestjs/common';
 import { TemplatesService } from './templates.service';
 import { CreateTemplateDto } from './dto/create-template.dto';
@@ -44,7 +45,9 @@ export class TemplatesController {
 
   @Get(':id')
   async findOne(@Param('id') id: string, @Request() req) {
-    return this.templatesService.findOne(id, req.user.activeOrg);
+    const template = await this.templatesService.findOne(id, req.user.activeOrg);
+    if (!template) throw new NotFoundException(`Template ${id} not found`);
+    return template;
   }
 
   @Post()

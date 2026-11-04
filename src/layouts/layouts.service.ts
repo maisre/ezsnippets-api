@@ -8,7 +8,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Model, Types } from 'mongoose';
-import { exportSiteZip } from '../export/site-export';
+import { exportMultiPageSiteZip } from '../export/site-export';
 import { Layout } from './interfaces/layout.interface';
 import { CreateLayoutDto } from './dto/create-layout.dto';
 import { UpdateLayoutDto } from './dto/update-layout.dto';
@@ -112,7 +112,7 @@ export class LayoutsService {
     orgId: string,
     userId: string,
   ): Promise<Layout> {
-    await this.enforceLimit(orgId);
+    const limit = await this.enforceLimit(orgId);
 
     const layoutData = {
       name: createLayoutDto.name,
@@ -128,7 +128,7 @@ export class LayoutsService {
     };
 
     const createdLayout = new this.layoutModel(layoutData);
-    return createdLayout.save();
+    return this.saveWithinLimit(createdLayout, orgId, limit);
   }
 
   // Duplicate an existing layout within the caller's active org. Enforces, in
@@ -146,7 +146,7 @@ export class LayoutsService {
       throw new NotFoundException(`Layout with id ${id} not found`);
     }
 
-    await this.enforceLimit(orgId);
+    const limit = await this.enforceLimit(orgId);
 
     const src = source.toObject();
     // Strip subdocument _ids so the copied subPages get fresh ones.
@@ -164,7 +164,7 @@ export class LayoutsService {
       org: new Types.ObjectId(orgId),
       createdBy: new Types.ObjectId(userId),
     });
-    return createdLayout.save();
+    return this.saveWithinLimit(createdLayout, orgId, limit);
   }
 
   async update(
@@ -328,7 +328,11 @@ export class LayoutsService {
 
     // In onlyMissing mode we only touch snippets never AI-customized, leaving
     // the rest — and their overrides — untouched.
-    const shouldDo = (ref: any) => !options.onlyMissing || ref.aiCustomized !== true;
+    // Hand-edited snippets (any text override) count as done too, matching the
+    // editor; re-running AI would overwrite the edits.
+    const shouldDo = (ref: any) =>
+      !options.onlyMissing ||
+      (ref.aiCustomized !== true && !ref.textReplacementOverride?.length);
 
     // Gather all snippet references from nav, footer, and subPages
     const allSnippetRefs: Array<{ ref: any; path: string; index?: number; subIndex?: number }> = [];
@@ -903,8 +907,9 @@ export class LayoutsService {
     return { licenseAllUrl: wrapAffiliate(shareUrl) };
   }
 
-  // Build a downloadable static-site zip for a layout. Renders via ez-view with
-  // ?chrome=false so the subpage-switcher overlay is left out of the export.
+  // Build a downloadable static-site zip for a layout: one HTML file per
+  // subpage (Home is index.html) sharing styles.css, scripts.js and assets/,
+  // with nav links pointing at the page files. ez-view assembles the files.
   async exportZip(
     id: string,
     orgId: string,
@@ -917,8 +922,8 @@ export class LayoutsService {
     const csv =
       'shutterstock_id,uses\n' +
       images.map((i) => `${i.shutterstockId},${i.uses}`).join('\n');
-    return exportSiteZip({
-      renderUrl: `${this.viewUrl}/view/layout/${id}?chrome=false`,
+    return exportMultiPageSiteZip({
+      renderUrl: `${this.viewUrl}/view/layout/${id}/static`,
       name: layout.name || 'layout',
       licensingCsv: csv,
     });
@@ -937,8 +942,9 @@ export class LayoutsService {
       throw new NotFoundException(`Layout with id ${id} not found`);
     }
 
+    let restoreLimit = -1;
     if (!archived && layout.status === 'archived') {
-      await this.enforceLimit(orgId);
+      restoreLimit = await this.enforceLimit(orgId);
     }
 
     const updatedLayout = await this.layoutModel
@@ -951,6 +957,20 @@ export class LayoutsService {
 
     if (!updatedLayout) {
       throw new NotFoundException(`Layout with id ${id} not found`);
+    }
+
+    // Same race as saveWithinLimit: parallel restores each pass the check.
+    // Undo this one if the org is now over its cap.
+    if (
+      restoreLimit !== -1 &&
+      (await this.countForOrg(orgId)) > restoreLimit
+    ) {
+      await this.layoutModel
+        .updateOne({ _id: id, org: orgId }, { $set: { status: 'archived' } })
+        .exec();
+      throw new ForbiddenException(
+        `Layout limit reached (${restoreLimit}). Upgrade your plan to restore more layouts.`,
+      );
     }
     return updatedLayout;
   }
@@ -1023,7 +1043,7 @@ export class LayoutsService {
       );
     }
 
-    await this.enforceLimit(orgId);
+    const limit = await this.enforceLimit(orgId);
 
     const created = new this.layoutModel({
       name: dto.name?.trim() || template.name,
@@ -1041,7 +1061,7 @@ export class LayoutsService {
       createdBy: new Types.ObjectId(userId),
     });
 
-    return created.save();
+    return this.saveWithinLimit(created, orgId, limit);
   }
 
   /**
@@ -1130,7 +1150,8 @@ export class LayoutsService {
       .aiDailyLimit;
   }
 
-  private async enforceLimit(orgId: string): Promise<void> {
+  /** Throws if the org is at its layout limit; returns the limit (-1 = none). */
+  private async enforceLimit(orgId: string): Promise<number> {
     const org = await this.orgsService.findOne(orgId);
     const entitlement = await this.plansService.entitlementFor(org);
     if (!entitlement) {
@@ -1140,7 +1161,7 @@ export class LayoutsService {
     }
 
     const { limits } = entitlement;
-    if (limits.maxLayouts === -1) return; // Unlimited
+    if (limits.maxLayouts === -1) return -1; // Unlimited
 
     const current = await this.countForOrg(orgId);
     if (current >= limits.maxLayouts) {
@@ -1148,5 +1169,33 @@ export class LayoutsService {
         `Layout limit reached (${limits.maxLayouts}). Upgrade your plan to create more layouts.`,
       );
     }
+    return limits.maxLayouts;
+  }
+
+  /**
+   * Save a new layout that enforceLimit has already admitted, then make sure it
+   * still fits. The check-then-insert above is not atomic: parallel requests
+   * each see room and all insert. Counting only layouts created no later than
+   * this one (ObjectIds sort by creation) means the first `limit` survive and
+   * every later racer removes itself.
+   */
+  private async saveWithinLimit(doc: any, orgId: string, limit: number) {
+    const saved = await doc.save();
+    if (limit === -1) return saved;
+    const upToThis = await this.layoutModel
+      .countDocuments({
+        org: orgId,
+        status: { $ne: 'archived' },
+        deletedAt: null,
+        _id: { $lte: saved._id },
+      })
+      .exec();
+    if (upToThis > limit) {
+      await this.layoutModel.deleteOne({ _id: saved._id }).exec();
+      throw new ForbiddenException(
+        `Layout limit reached (${limit}). Upgrade your plan to create more layouts.`,
+      );
+    }
+    return saved;
   }
 }

@@ -274,7 +274,13 @@ describe('PaymentsService team downgrade', () => {
       productId: PRO,
       subscriptionStatus: 'active',
     });
-    (paddle as any).prices = { get: jest.fn(async () => ({ productId: AGENCY })) };
+    (paddle as any).prices = {
+      get: jest.fn(async () => ({
+        productId: AGENCY,
+        status: 'active',
+        billingCycle: { interval: 'month', frequency: 1 },
+      })),
+    };
 
     await expect(service.previewUpgrade(userId, 'pri_agency_month')).rejects.toMatchObject({
       response: expect.objectContaining({ code: 'DOWNGRADE_SCHEDULED' }),

@@ -3,12 +3,31 @@ import { Model, Types } from 'mongoose';
 import { User } from './interfaces/user.interface';
 import { Acquisition } from '../auth/acquisition';
 
+/** How emails are stored and compared: trimmed and lower-cased. */
+export function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
 @Injectable()
 export class UsersService {
   constructor(@Inject('USER_MODEL') private readonly userModel: Model<User>) {}
 
-  async findByEmail(email: string): Promise<User | null> {
-    return this.userModel.findOne({ email }).exec();
+  /**
+   * Look a user up by email, ignoring case and surrounding spaces.
+   *
+   * New accounts are stored normalised (see normalizeEmail), so the exact
+   * match is the normal path. Older rows were stored as typed, so a miss falls
+   * back to a case-insensitive match instead of migrating them. Neither query
+   * has an index on email yet — see the recommendation in the security notes.
+   */
+  async findByEmail(email: unknown): Promise<User | null> {
+    if (typeof email !== 'string') return null;
+    const normalized = normalizeEmail(email);
+    if (!normalized) return null;
+    return (
+      (await this.userModel.findOne({ email: normalized }).exec()) ??
+      this.findByEmailInsensitive(normalized)
+    );
   }
 
   // Signup stores email as typed, but invites are keyed lower-cased.
@@ -30,7 +49,7 @@ export class UsersService {
     acquisition?: Acquisition,
   ): Promise<User> {
     const user = new this.userModel({
-      email,
+      email: normalizeEmail(email),
       password: hashedPassword,
       ...(acquisition && { acquisition }),
     });

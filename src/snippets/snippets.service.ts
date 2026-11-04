@@ -8,17 +8,6 @@ export class SnippetsService {
     @Inject('SNIPPETS_MODEL') private readonly snippetModel: Model<Snippet>,
   ) {}
 
-  async findAll(orgId?: string): Promise<Snippet[]> {
-    if (orgId) {
-      return this.snippetModel
-        .find({ $or: [{ org: { $exists: false } }, { org: null }, { org: orgId }] })
-        .exec();
-    }
-    return this.snippetModel
-      .find({ $or: [{ org: { $exists: false } }, { org: null }] })
-      .exec();
-  }
-
   /**
    * The whole library, projected down to what the palette and the page
    * structure list need. Deliberately uncapped: the editor resolves a page's
@@ -31,7 +20,9 @@ export class SnippetsService {
     const shared = [{ org: { $exists: false } }, { org: null }];
     return this.snippetModel
       .find({ $or: orgId ? [...shared, { org: orgId }] : shared })
-      .select('_id type tags')
+      // imageReplacement.token: which image slots a snippet has, so the
+      // editors only ask for images on snippets that can show them.
+      .select('_id type tags imageReplacement.token')
       .exec();
   }
 

@@ -12,16 +12,24 @@ import {
   Paddle,
   type AdjustmentNotification,
   type EventEntity,
+  type Price,
   type SubscriptionNotification,
   type TransactionNotification,
 } from '@paddle/paddle-node-sdk';
+import * as Sentry from '@sentry/nestjs';
 import { Model, Types } from 'mongoose';
 import { Org } from '../orgs/interfaces/org.interface';
 import { OrgsService } from '../orgs/orgs.service';
-import { pickPlanRef, PlanRef, PlanTier } from '../plans/plan-catalog';
+import {
+  PLAN_TIERS,
+  pickPlanRef,
+  PlanRef,
+  PlanTier,
+} from '../plans/plan-catalog';
 import {
   downgradeGraceProductId,
   hasActiveSubscription,
+  switchGraceProductId,
 } from '../plans/subscription-status';
 import {
   BillingInterval,
@@ -97,8 +105,8 @@ export class PaymentsService {
     userId: string,
     email: string,
     priceId: string,
-  ): Promise<{ transactionId: string; orgId: string }> {
-    const tier = await this.tierForPrice(priceId);
+  ): Promise<{ transactionId: string; orgId: string; customerEmail?: string }> {
+    const { tier, price } = await this.planPrice(priceId);
     const personal = await this.orgsService.findPersonalOrg(userId);
     if (!personal) throw new NotFoundException('Personal workspace not found');
 
@@ -138,9 +146,21 @@ export class PaymentsService {
       throw new ConflictException('This workspace already has an active plan.');
     }
 
+    const customerId =
+      target.paddleCustomerId ?? personal.paddleCustomerId ?? null;
+    // The free trial is once per customer. Someone who has subscribed before
+    // buys the same product at the same price through a one-off copy of it
+    // with no trial — product-keyed entitlements don't notice the difference,
+    // and no extra catalog prices have to be kept in step.
+    const skipTrial =
+      !!price.trialPeriod && (await this.hasHadSubscription(userId));
     const transaction = await this.paddle.transactions.create({
-      items: [{ priceId, quantity: 1 }],
-      customerId: target.paddleCustomerId ?? personal.paddleCustomerId ?? null,
+      items: [
+        skipTrial
+          ? { price: this.withoutTrial(price), quantity: 1 }
+          : { priceId, quantity: 1 },
+      ],
+      customerId,
       customData: {
         orgId: String(target._id),
         ...(replacesSubscriptionId ? { replacesSubscriptionId } : {}),
@@ -148,9 +168,16 @@ export class PaymentsService {
     });
 
     this.logger.log(
-      `Transaction ${transaction.id} created for org ${target._id} (${tier.name})`,
+      `Transaction ${transaction.id} created for org ${target._id} (${tier.name}${skipTrial ? ', no trial' : ''})`,
     );
-    return { transactionId: transaction.id, orgId: String(target._id) };
+    // First purchase: no Paddle customer yet, so the overlay would ask for an
+    // email from scratch and receipts could go to whatever gets typed. The
+    // client prefills it with the account's email instead.
+    return {
+      transactionId: transaction.id,
+      orgId: String(target._id),
+      ...(customerId || !email ? {} : { customerEmail: email }),
+    };
   }
 
   /**
@@ -168,6 +195,7 @@ export class PaymentsService {
         prorationBillingMode: 'prorated_immediately',
       })
       .catch(rethrowPaddleRefusal);
+    this.assertCreditsPaidPeriod(preview, personal);
     const totals = preview.immediateTransaction?.details?.totals;
     return {
       amountDueToday: this.formatMinorUnits(totals?.grandTotal),
@@ -192,6 +220,13 @@ export class PaymentsService {
     priceId: string,
   ): Promise<{ orgId: string }> {
     const { personal, tier } = await this.upgradeContext(userId, priceId);
+    await this.paddle.subscriptions
+      .previewUpdate(personal.subscriptionId!, {
+        items: [{ priceId, quantity: 1 }],
+        prorationBillingMode: 'prorated_immediately',
+      })
+      .catch(rethrowPaddleRefusal)
+      .then((preview) => this.assertCreditsPaidPeriod(preview, personal));
     const team = await this.findOrCreateTeamOrg(userId, email, personal);
     const teamId = String(team._id);
 
@@ -423,6 +458,377 @@ export class PaymentsService {
     return { orgId };
   }
 
+  // --- single-seat plan changes ---------------------------------------------
+
+  /**
+   * What the pricing and account pages need to offer the right buttons: the
+   * caller's own single-seat subscription (it always lives on their personal
+   * org), any switch scheduled on it, and whether a checkout would include
+   * the free trial.
+   */
+  async billingState(userId: string): Promise<{
+    trialEligible: boolean;
+    includedWithTeam: boolean;
+    current: {
+      plan: string;
+      interval: BillingInterval | null;
+      status: string;
+      cancelAtPeriodEnd: boolean;
+      scheduledSwitch: { toPlan: string; effectiveAt: string } | null;
+    } | null;
+  }> {
+    const personal = await this.orgsService.findPersonalOrg(userId);
+    if (!personal) throw new NotFoundException('Personal workspace not found');
+
+    const entitlement = await this.plansService.entitlementFor(personal);
+    let current: Awaited<ReturnType<PaymentsService['billingState']>>['current'] = null;
+    if (hasActiveSubscription(personal) && personal.subscriptionStatus && personal.subscriptionId) {
+      const grace = switchGraceProductId(personal) ? personal.scheduledSwitch! : null;
+      const sub = await this.paddle.subscriptions
+        .get(personal.subscriptionId)
+        .catch(() => null);
+      const interval = sub?.billingCycle?.interval;
+      current = {
+        plan: this.plansService.planName(grace?.productId ?? personal.productId),
+        interval: interval === 'month' || interval === 'year' ? interval : null,
+        status: personal.subscriptionStatus,
+        cancelAtPeriodEnd: !!personal.cancelAtPeriodEnd,
+        scheduledSwitch: grace
+          ? {
+              toPlan: this.plansService.planName(grace.toProductId),
+              effectiveAt: new Date(grace.until).toISOString(),
+            }
+          : null,
+      };
+    }
+
+    return {
+      trialEligible: !(await this.hasHadSubscription(userId)),
+      includedWithTeam: entitlement?.source === 'team-owner',
+      current,
+    };
+  }
+
+  /** What changing the caller's single-seat plan to `priceId` would do. */
+  async previewPlanChange(userId: string, priceId: unknown) {
+    const ctx = await this.planChangeContext(userId, priceId);
+    const preview = await this.paddle.subscriptions
+      .previewUpdate(ctx.personal.subscriptionId!, ctx.request)
+      .catch(rethrowPaddleRefusal);
+    if (ctx.kind === 'upgrade') this.assertCreditsPaidPeriod(preview, ctx.personal);
+    const now = preview.immediateTransaction?.details?.totals;
+    const next = preview.nextTransaction?.details?.totals;
+    return {
+      kind: ctx.kind,
+      plan: ctx.target.tier.name,
+      interval: ctx.targetInterval,
+      currentPlan: ctx.current.tier.name,
+      amountDueToday: this.formatMinorUnits(now?.grandTotal),
+      nextAmount: next ? this.formatMinorUnits(next.grandTotal) : null,
+      nextBilledAt: preview.nextBilledAt,
+      currency: now?.currencyCode ?? next?.currencyCode ?? preview.currencyCode,
+      effectiveAt: ctx.kind === 'downgrade' ? ctx.periodEnd : null,
+    };
+  }
+
+  /**
+   * Change a single-seat subscription to another single-seat price, on the
+   * same org and the same subscription.
+   *
+   *  - upgrade (higher tier, or monthly -> yearly): now, prorated, charged
+   *    immediately — refused outright if that charge fails.
+   *  - downgrade (lower tier, same interval): the price changes now with
+   *    `do_not_bill`, and scheduledSwitch keeps the paid-up tier until the
+   *    period ends — the same shape as a team downgrade.
+   *  - during a trial: Paddle only accepts `do_not_bill`, which swaps the item
+   *    and keeps the trial; the new price is what bills when it ends.
+   *  - back to the plan a scheduled downgrade is leaving: undo, no charge.
+   *
+   * The kind is worked out again here from Paddle's state, never taken from
+   * the preview the client saw.
+   */
+  async changePlan(userId: string, priceId: unknown) {
+    const ctx = await this.planChangeContext(userId, priceId);
+    const { personal } = ctx;
+    const orgId = String(personal._id);
+    if (ctx.kind === 'upgrade') {
+      const preview = await this.paddle.subscriptions
+        .previewUpdate(personal.subscriptionId!, ctx.request)
+        .catch(rethrowPaddleRefusal);
+      this.assertCreditsPaidPeriod(preview, personal);
+    }
+
+    const sub = await this.paddle.subscriptions
+      .update(personal.subscriptionId!, ctx.request)
+      .catch(rethrowPaddleRefusal);
+
+    if (ctx.kind === 'downgrade') {
+      await this.orgsService.setScheduledSwitch(orgId, {
+        subscriptionId: sub.id,
+        until: new Date(ctx.periodEnd!),
+        productId: ctx.current.productId,
+        priceId: ctx.current.priceId,
+        toProductId: ctx.target.price.productId,
+        toPriceId: ctx.target.price.id,
+        scheduledAt: new Date(),
+      });
+    }
+    const ref = this.planRefFor(sub as unknown as SubscriptionNotification);
+    await this.orgsService.updateSubscription(orgId, {
+      plan: ref.priceId,
+      productId: ref.productId,
+      subscriptionStatus: sub.status,
+      currentPeriodEnd: this.toUnixSeconds(sub.currentBillingPeriod?.endsAt),
+      cancelAtPeriodEnd: sub.scheduledChange?.action === 'cancel',
+    });
+    if (ctx.kind === 'undo' || ctx.kind === 'upgrade' || ctx.kind === 'trial') {
+      await this.orgsService.clearScheduledSwitch(orgId);
+    }
+
+    this.logger.log(
+      `Plan change (${ctx.kind}) ${ctx.current.tier.name} -> ${ctx.target.tier.name} on ${sub.id} for org ${orgId}`,
+    );
+    return {
+      kind: ctx.kind,
+      plan: ctx.target.tier.name,
+      effectiveAt: ctx.kind === 'downgrade' ? ctx.periodEnd : null,
+    };
+  }
+
+  /** "Keep my plan": undo a scheduled switch to a cheaper plan before it lands. */
+  async cancelPlanSwitch(userId: string): Promise<{ plan: string }> {
+    const personal = await this.orgsService.findPersonalOrg(userId);
+    const grace = personal && switchGraceProductId(personal) ? personal.scheduledSwitch : null;
+    if (!personal || !grace || personal.subscriptionId === undefined) {
+      throw new BadRequestException('There’s no scheduled plan switch to cancel.');
+    }
+    // This period is already paid at the old price, so no charge now; the
+    // next renewal bills it again. The stored price may be a no-trial copy —
+    // Paddle accepts those back by id.
+    const sub = await this.paddle.subscriptions
+      .update(personal.subscriptionId, {
+        items: [{ priceId: grace.priceId, quantity: 1 }],
+        prorationBillingMode: 'do_not_bill',
+      })
+      .catch(rethrowPaddleRefusal);
+    const ref = this.planRefFor(sub as unknown as SubscriptionNotification);
+    await this.orgsService.updateSubscription(String(personal._id), {
+      plan: ref.priceId,
+      productId: ref.productId,
+      subscriptionStatus: sub.status,
+      currentPeriodEnd: this.toUnixSeconds(sub.currentBillingPeriod?.endsAt),
+    });
+    await this.orgsService.clearScheduledSwitch(String(personal._id));
+    this.logger.log(`Plan switch on ${sub.id} cancelled for org ${personal._id}`);
+    return { plan: this.plansService.planName(ref.productId) };
+  }
+
+  private async planChangeContext(userId: string, priceId: unknown) {
+    const target = await this.planPrice(priceId);
+    if (target.tier.limits.maxSeats > 1) {
+      throw new BadRequestException('Team plans are bought from the pricing page.');
+    }
+    const personal = await this.orgsService.findPersonalOrg(userId);
+    if (
+      !personal?.subscriptionId ||
+      !personal.subscriptionStatus ||
+      !hasActiveSubscription(personal)
+    ) {
+      throw new BadRequestException('No active subscription to change.');
+    }
+    const owned = await this.orgsService.findTeamOrgsOwnedBy(userId);
+    if (owned.some((o) => downgradeGraceProductId(o))) {
+      throw new ConflictException({
+        message:
+          'Your team is scheduled to move to a single-seat plan. Cancel that from the account page before changing plans.',
+        code: 'DOWNGRADE_SCHEDULED',
+      });
+    }
+    const trialing = personal.subscriptionStatus === 'trialing';
+    if (!trialing && personal.subscriptionStatus !== 'active') {
+      throw new ConflictException(
+        'Sort out the payment on this plan before changing it — Manage Billing has the details.',
+      );
+    }
+    if (personal.cancelAtPeriodEnd) {
+      throw new ConflictException(
+        'This plan is set to end. Resume it from Manage Billing before changing plans.',
+      );
+    }
+
+    const sub = await this.paddle.subscriptions.get(personal.subscriptionId);
+    const item =
+      sub.items.find((i) => this.plansService.findTier(i.price?.productId)) ?? sub.items[0];
+    const currentTier = this.plansService.findTier(item?.price?.productId);
+    const currentInterval = item?.price?.billingCycle?.interval;
+    if (!item?.price || !currentTier || currentTier.limits.maxSeats > 1) {
+      throw new ConflictException('This plan can’t be changed here. Contact support.');
+    }
+    const current = {
+      tier: currentTier,
+      productId: item.price.productId,
+      priceId: item.price.id,
+      interval: currentInterval,
+    };
+    const targetInterval = target.price.billingCycle!.interval;
+    if (current.priceId === target.price.id) {
+      throw new BadRequestException('You’re already on this plan.');
+    }
+
+    const rank = (t: PlanTier) => PLAN_TIERS.findIndex((x) => x.name === t.name);
+    const up = rank(target.tier) - rank(currentTier);
+    const sameInterval = targetInterval === currentInterval;
+    const toYearly = currentInterval === 'month' && targetInterval === 'year';
+    const periodEnd = sub.currentBillingPeriod?.endsAt ?? null;
+    const grace = switchGraceProductId(personal) ? personal.scheduledSwitch! : null;
+
+    let kind: 'upgrade' | 'downgrade' | 'trial' | 'undo';
+    if (trialing) {
+      kind = 'trial';
+    } else if (grace) {
+      if (target.price.productId !== grace.productId || !sameInterval) {
+        throw new ConflictException({
+          message: `You’re already switching to ${this.plansService.planName(grace.toProductId)} at renewal. Keep your current plan first, then choose another.`,
+          code: 'SWITCH_SCHEDULED',
+        });
+      }
+      kind = 'undo';
+    } else if ((up > 0 && (sameInterval || toYearly)) || (up === 0 && toYearly)) {
+      kind = 'upgrade';
+    } else if (up < 0 && sameInterval) {
+      kind = 'downgrade';
+    } else {
+      // Yearly -> monthly, or a cheaper tier on a different interval: the
+      // prepaid year would have to be credited back, which do_not_bill can't
+      // express and proration would turn into an account credit.
+      throw new ConflictException({
+        message:
+          'That change has to happen at renewal on your current billing period. Pick the same billing period, or contact support.',
+        code: 'INTERVAL_CHANGE',
+      });
+    }
+    if (kind === 'downgrade' && !periodEnd) {
+      throw new ConflictException('This plan has no billing period on record yet. Try again shortly.');
+    }
+
+    const request =
+      kind === 'upgrade'
+        ? {
+            items: [{ priceId: target.price.id, quantity: 1 }],
+            prorationBillingMode: 'prorated_immediately' as const,
+            onPaymentFailure: 'prevent_change' as const,
+          }
+        : {
+            items: [{ priceId: target.price.id, quantity: 1 }],
+            prorationBillingMode: 'do_not_bill' as const,
+          };
+
+    return { personal, target, current, targetInterval, kind, periodEnd, request };
+  }
+
+  /**
+   * A prorated upgrade of a paid-up subscription must credit what's already
+   * been paid for the rest of the period — the immediate charge carries a
+   * negative proration line for the outgoing item.
+   *
+   * Paddle drops that credit once the item has been changed with `do_not_bill`
+   * in the same period (a scheduled downgrade, its undo, a team downgrade or
+   * its undo): verified in sandbox, the upgrade then charges the new price in
+   * full on top of what was paid. Rather than overcharge, refuse until the
+   * renewal resets the period.
+   */
+  private assertCreditsPaidPeriod(
+    preview: { immediateTransaction?: { details?: { lineItems?: { totals?: { total?: string } }[] } | null } | null },
+    org: Org,
+  ): void {
+    if (org.subscriptionStatus !== 'active') return;
+    const lines = preview.immediateTransaction?.details?.lineItems ?? [];
+    if (lines.some((l) => Number(l.totals?.total) < 0)) return;
+    const renews = org.currentPeriodEnd
+      ? new Date(org.currentPeriodEnd * 1000).toLocaleDateString('en-US', {
+          month: 'long',
+          day: 'numeric',
+          year: 'numeric',
+        })
+      : 'your next renewal';
+    this.logger.warn(
+      `Refusing prorated upgrade on ${org.subscriptionId} (org ${org._id}): no credit for the current period`,
+    );
+    throw new ConflictException({
+      message: `You changed plans earlier in this billing period, so an upgrade right now would charge you again for time you've already paid for. You can upgrade from ${renews}, or contact support and we'll do it for you.`,
+      code: 'UPGRADE_AFTER_CHANGE',
+    });
+  }
+
+  // --- free trial: once per customer ------------------------------------------
+
+  /**
+   * Has this person ever had a subscription? If so, checkout carries no trial.
+   *
+   * Durable evidence first: trialUsedAt (stamped on subscription.created on
+   * the billed org and the owner's personal org) or any subscription field on
+   * an org they own — which also covers everyone who subscribed before
+   * trialUsedAt existed, since canceled orgs keep their plan and status. Only
+   * when the database has nothing does it ask Paddle whether a customer id we
+   * hold has ever had a subscription. If Paddle can't be reached the answer is
+   * "no": wrongly granting one trial is better than wrongly charging a new
+   * customer on day one.
+   */
+  async hasHadSubscription(userId: string): Promise<boolean> {
+    const [personal, teams] = await Promise.all([
+      this.orgsService.findPersonalOrg(userId),
+      this.orgsService.findTeamOrgsOwnedBy(userId),
+    ]);
+    const orgs = [personal, ...teams].filter((o): o is Org => !!o);
+    if (
+      orgs.some(
+        (o) => o.trialUsedAt || o.subscriptionId || o.subscriptionStatus || o.productId || o.plan,
+      )
+    ) {
+      return true;
+    }
+    const customers = [
+      ...new Set(orgs.map((o) => o.paddleCustomerId).filter((c): c is string => !!c)),
+    ];
+    for (const customerId of customers) {
+      try {
+        const found = await this.paddle.subscriptions
+          .list({ customerId: [customerId], perPage: 1 })
+          .next();
+        if (found.length > 0) return true;
+      } catch (err) {
+        this.logger.warn(`Could not check subscription history for ${customerId}: ${err}`);
+      }
+    }
+    return false;
+  }
+
+  /** A one-off copy of a catalog price with the trial taken off. */
+  private withoutTrial(price: Price) {
+    return {
+      description: price.description,
+      name: price.name,
+      productId: price.productId,
+      unitPrice: price.unitPrice,
+      unitPriceOverrides: price.unitPriceOverrides,
+      billingCycle: price.billingCycle,
+      taxMode: price.taxMode,
+      quantity: price.quantity,
+      trialPeriod: null,
+    };
+  }
+
+  /** The billed org and its owner's personal org — see Org.trialUsedAt. */
+  private async stampTrialUsed(org: Org): Promise<void> {
+    const owner = org.members.find((m) => m.role === 'owner');
+    const personal =
+      owner && !org.personal
+        ? await this.orgsService.findPersonalOrg(String(owner.user))
+        : null;
+    const ids = [String(org._id), ...(personal ? [String(personal._id)] : [])];
+    await this.orgsService.markTrialUsed(ids);
+  }
+
   /**
    * A downgrade moves the subscription onto the caller's personal workspace.
    * After an ownership transfer the subscription is still the previous
@@ -544,6 +950,13 @@ export class PaymentsService {
         code: 'DOWNGRADE_SCHEDULED',
       });
     }
+    if (switchGraceProductId(personal)) {
+      throw new ConflictException({
+        message:
+          'Your plan is scheduled to switch at renewal. Keep your current plan from the account page first, then upgrade.',
+        code: 'SWITCH_SCHEDULED',
+      });
+    }
     if (personal.subscriptionStatus === 'trialing') {
       throw new ConflictException({
         message:
@@ -571,13 +984,24 @@ export class PaymentsService {
   }
 
   private async tierForPrice(priceId: string): Promise<PlanTier> {
+    return (await this.planPrice(priceId)).tier;
+  }
+
+  /**
+   * A catalog price the client asked for, and the tier its product grants.
+   * Only recurring catalog prices for products we map are accepted — the
+   * client names a price, never a plan or an amount.
+   */
+  private async planPrice(priceId: unknown): Promise<{ tier: PlanTier; price: Price }> {
     if (typeof priceId !== 'string' || !priceId) {
       throw new BadRequestException('priceId is required');
     }
     const price = await this.paddle.prices.get(priceId).catch(() => null);
     const tier = this.plansService.findTier(price?.productId);
-    if (!price || !tier) throw new BadRequestException('Unknown plan');
-    return tier;
+    if (!price || !tier || price.status !== 'active' || !price.billingCycle) {
+      throw new BadRequestException('Unknown plan');
+    }
+    return { tier, price };
   }
 
   // Billing is owner-only: cancelling or opening the portal affects everyone
@@ -684,11 +1108,19 @@ export class PaymentsService {
       throw new BadRequestException('Missing paddle-signature header');
     }
 
-    const event = await this.paddle.webhooks.unmarshal(
-      payload.toString(),
-      this.webhookSecret,
-      signature,
-    );
+    // unmarshal throws on a bad or expired (>5s old) signature. That's the
+    // sender's problem, so answer 400 instead of letting it surface as a 500.
+    let event: EventEntity;
+    try {
+      event = await this.paddle.webhooks.unmarshal(
+        payload.toString(),
+        this.webhookSecret,
+        signature,
+      );
+    } catch (err) {
+      this.logger.warn(`Rejected webhook: ${err}`);
+      throw new BadRequestException('Invalid webhook signature');
+    }
 
     // Anything we don't act on is acked and dropped without touching the
     // database — the destination can stay subscribed to everything without
@@ -795,11 +1227,45 @@ export class PaymentsService {
     const org = await this.orgsService.findOne(orgId);
     if (!org) return;
     if (this.isStale(org, occurredAt)) {
-      // A newer event already recorded the subscription, but only this one
-      // is guaranteed to arrive for every new subscription — so the trial it
-      // replaces is still retired here.
+      // A newer event (activated/updated) already recorded the subscription,
+      // but only this one is guaranteed to arrive for every new subscription —
+      // so the one-off work still happens here: the ended downgrade and stale
+      // payer are cleared, the confirmation goes out, the replaced trial is
+      // retired.
+      if (org.subscriptionId === sub.id) {
+        await this.clearEndedDowngrade(org);
+        await this.sqsService.sendMessage(this.emailQueueUrl, {
+          type: 'subscription_confirmed',
+          orgId,
+          orgName: org.name,
+          plan: this.plansService.planName(this.planRefFor(sub).productId),
+        });
+      }
+      await this.stampTrialUsed(org);
       await this.retireReplacedTrial(sub);
       return;
+    }
+
+    // A second live subscription landing on an org that already pays (two
+    // checkouts completed, or a re-purchase while a webhook was delayed) would
+    // overwrite the first one's id — leaving it billing with nothing tracking
+    // it. The new one is still recorded; this makes sure someone refunds the
+    // other. A trial this purchase replaces is expected and excluded.
+    const replaces = (sub.customData as Record<string, unknown> | null)
+      ?.replacesSubscriptionId;
+    if (
+      org.subscriptionId &&
+      org.subscriptionId !== sub.id &&
+      org.subscriptionId !== replaces &&
+      hasActiveSubscription(org)
+    ) {
+      this.logger.error(
+        `Org ${orgId} already has active subscription ${org.subscriptionId}; ${sub.id} replaces it — the old one is still billing`,
+      );
+      Sentry.captureMessage('Org received a second active Paddle subscription', {
+        level: 'error',
+        extra: { orgId, existing: org.subscriptionId, incoming: sub.id },
+      });
     }
 
     const ref = this.planRefFor(sub);
@@ -814,6 +1280,7 @@ export class PaymentsService {
       subscriptionEventAt: occurredAt,
     });
     await this.clearEndedDowngrade(org);
+    await this.stampTrialUsed(org);
 
     await this.sqsService.sendMessage(this.emailQueueUrl, {
       type: 'subscription_confirmed',
@@ -881,6 +1348,9 @@ export class PaymentsService {
       cancelAtPeriodEnd: sub.scheduledChange?.action === 'cancel',
       subscriptionEventAt: occurredAt,
     });
+    // Normally done on subscription.created; this covers one that never
+    // resolved to an org (missing customData) but whose later events did.
+    if (!org.trialUsedAt) await this.stampTrialUsed(org);
 
     this.logger.log(`Subscription ${sub.status} for org ${org.id}`);
   }

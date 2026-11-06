@@ -18,8 +18,10 @@ import { AI_USAGE_MODEL } from './ai-usage.providers';
 export type AiOperation =
   | 'page.customize'
   | 'page.customize-images'
+  | 'page.image-keywords'
   | 'layout.customize'
   | 'layout.customize-images'
+  | 'layout.image-keywords'
   | 'chat.snippet-edit'
   | 'chat.image-search';
 

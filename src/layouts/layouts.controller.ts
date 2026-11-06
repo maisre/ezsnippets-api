@@ -128,6 +128,15 @@ export class LayoutsController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Post(':id/image-keywords')
+  async suggestImageKeywords(
+    @Param('id') id: string,
+    @Request() req,
+  ): Promise<{ keywords: string[] }> {
+    return this.layoutsService.suggestImageKeywords(id, req.user.activeOrg);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Post(':id/customize-images')
   async customizeImages(
     @Param('id') id: string,
@@ -135,6 +144,8 @@ export class LayoutsController {
     @Request() req,
   ): Promise<Layout> {
     return this.layoutsService.customizeImages(id, req.user.activeOrg, {
+      mode: dto?.mode,
+      keywords: typeof dto?.keywords === 'string' ? dto.keywords : undefined,
       direction: dto?.direction,
       replaceExisting: dto?.replaceExisting,
       onlyMissing: dto?.onlyMissing,

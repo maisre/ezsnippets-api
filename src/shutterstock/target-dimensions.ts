@@ -64,3 +64,17 @@ export function slotShapeFor(replacement: string): 'wide' | 'tall' | 'square' | 
   if (aspect <= 0.75) return 'tall';
   return 'square';
 }
+
+/**
+ * True for small, roughly square slots: avatars, team headshots, testimonial
+ * faces. Quick fill gives these their own portrait search, because a keyword
+ * search like "craft brewery" returns no usable faces.
+ */
+export function isAvatarSlot(replacement: string): boolean {
+  const dims = TARGET_DIMENSIONS.get(replacement);
+  if (!dims) return false;
+  const [w, h] = dims.split('x').map(Number);
+  if (!w || !h || w > 200 || h > 200) return false;
+  const aspect = w / h;
+  return aspect >= 0.8 && aspect <= 1.25;
+}

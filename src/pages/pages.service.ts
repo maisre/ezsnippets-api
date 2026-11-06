@@ -20,7 +20,17 @@ import { SnippetsService } from '../snippets/snippets.service';
 import { OrgsService } from '../orgs/orgs.service';
 import { PlansService } from '../plans/plans.service';
 import { ShutterstockService } from '../shutterstock';
-import { targetAspectFor, slotShapeFor } from '../shutterstock/target-dimensions';
+import {
+  targetAspectFor,
+  slotShapeFor,
+  isAvatarSlot,
+} from '../shutterstock/target-dimensions';
+import {
+  fillImages,
+  keepSearchableKeywords,
+  FillMode,
+  ImageFillSummary,
+} from '../shutterstock/image-fill';
 import { wrapAffiliate, imagePageUrl } from '../shutterstock/affiliate';
 import { validateSlug } from '../common/slug-rules';
 import { assertSlugAvailable } from '../common/slug-conflict';
@@ -567,9 +577,37 @@ export class PagesService {
     return updatedPage;
   }
 
-  // Fill the page's image slots with stock photos: one AI-derived search query
-  // per slot, then the result whose aspect best fits that slot's intended
-  // dimensions.
+  // AI keyword chips for image Quick fill. Metered like any AI call; the
+  // editor still lets the user type keywords if this fails.
+  async suggestImageKeywords(
+    id: string,
+    orgId: string,
+  ): Promise<{ keywords: string[] }> {
+    const page = await this.findOne(id, orgId);
+    if (!page) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+
+    await this.aiUsageService.consume(
+      String(orgId),
+      'page.image-keywords',
+      await this.aiLimitFor(String(orgId)),
+    );
+
+    const keywords = await this.openaiService.suggestImageKeywords({
+      name: page.name,
+      siteName: page.siteName,
+      description: page.description,
+    });
+    return {
+      keywords: await keepSearchableKeywords(this.shutterstockService, keywords),
+    };
+  }
+
+  // Fill the page's image slots with stock photos. "quick" mode runs one
+  // keyword search and hands results out by slot shape (no AI); "smart" mode
+  // has OpenAI write a query per slot and falls back to quick if OpenAI fails.
+  // See shutterstock/image-fill.ts.
   //
   // Deliberately independent of customize() — separate button, separate OpenAI
   // call — so re-running text never re-runs images. By default only empty slots
@@ -579,11 +617,13 @@ export class PagesService {
     id: string,
     orgId: string,
     options: {
+      mode?: FillMode;
+      keywords?: string;
       direction?: string;
       replaceExisting?: boolean;
       onlyMissing?: boolean;
     } = {},
-  ): Promise<Page> {
+  ): Promise<Page & { imageFill: ImageFillSummary }> {
     const page = await this.findOne(id, orgId);
     if (!page) {
       throw new NotFoundException(`Page with id ${id} not found`);
@@ -609,6 +649,7 @@ export class PagesService {
       shape?: string;
       context?: string;
       targetAspect: number | null;
+      avatar: boolean;
     }> = [];
     const seen = new Set<string>();
 
@@ -644,63 +685,43 @@ export class PagesService {
           shape: slotShapeFor(ir.replacement) ?? undefined,
           context: context || undefined,
           targetAspect: targetAspectFor(ir.replacement),
+          avatar: isAvatarSlot(ir.replacement),
         });
       });
     });
 
-    const picksBySnippet = new Map<string, Array<{ token: string; image: any }>>();
-
-    // Skip the OpenAI + Shutterstock round-trip when there are no slots to fill
-    // (e.g. onlyMissing where the new snippets carry no image slots). Targeted
-    // snippets are still marked done below so the "missing" count clears.
-    if (slots.length) {
-      await this.aiUsageService.consume(
-        String(orgId),
-        'page.customize-images',
-        await this.aiLimitFor(String(orgId)),
-      );
-
-      const { slots: queries } = await this.openaiService.deriveImageQueries({
+    // Nothing to fill (e.g. onlyMissing where the new snippets carry no image
+    // slots) means no searches and no AI call. Targeted snippets are still
+    // marked done below so the "missing" count clears.
+    const { picks, summary } = await fillImages(
+      {
+        shutterstock: this.shutterstockService,
+        openai: this.openaiService,
+        consumeAi: async () => {
+          await this.aiUsageService.consume(
+            String(orgId),
+            'page.customize-images',
+            await this.aiLimitFor(String(orgId)),
+          );
+        },
+        logger: this.logger,
+      },
+      {
+        mode: options.mode === 'quick' ? 'quick' : 'smart',
+        keywords: options.keywords,
+        direction: options.direction,
         name: page.name,
         siteName: page.siteName,
         description: page.description,
-        direction: options.direction,
-        slots: slots.map(({ targetAspect, ...slot }) => slot),
-      });
+        slots,
+      },
+    );
 
-      const aspectByKey = new Map(
-        slots.map((s) => [`${s.snippetId}::${s.token}`, s.targetAspect]),
-      );
-
-      // Searches run in parallel: a page can hold 5-20 slots and the searches
-      // are unmetered, so sequential would make this unusably slow. One slot
-      // failing must not sink the rest — it just stays on its placeholder.
-      const picks = await Promise.all(
-        queries.map(async (q) => {
-          const key = `${q.snippetId}::${q.token}`;
-          try {
-            const image = await this.shutterstockService.findBestMatch(
-              q.query,
-              aspectByKey.get(key) ?? null,
-            );
-            return image
-              ? { snippetId: q.snippetId, token: q.token, image }
-              : null;
-          } catch (error) {
-            this.logger.warn(
-              `Stock search failed for ${key} ("${q.query}"): ${String(error)}`,
-            );
-            return null;
-          }
-        }),
-      );
-
-      for (const pick of picks) {
-        if (!pick) continue;
-        const list = picksBySnippet.get(pick.snippetId) || [];
-        list.push({ token: pick.token, image: pick.image });
-        picksBySnippet.set(pick.snippetId, list);
-      }
+    const picksBySnippet = new Map<string, Array<{ token: string; image: any }>>();
+    for (const pick of picks) {
+      const list = picksBySnippet.get(pick.snippetId) || [];
+      list.push({ token: pick.token, image: pick.image });
+      picksBySnippet.set(pick.snippetId, list);
     }
 
     // Apply picks and mark every targeted snippet as image-populated — even ones
@@ -747,7 +768,13 @@ export class PagesService {
       roomId: id,
     });
 
-    return updatedPage;
+    // The summary rides along on the response so the editor can say which mode
+    // ran (and whether smart fill fell back). toJSON keeps the usual id transform.
+    const doc: any = updatedPage;
+    return {
+      ...(typeof doc.toJSON === 'function' ? doc.toJSON() : doc),
+      imageFill: summary,
+    };
   }
 
   // The Shutterstock images used on a page, for the "finalize" licensing

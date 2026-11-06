@@ -19,7 +19,17 @@ import { SnippetsService } from '../snippets/snippets.service';
 import { OrgsService } from '../orgs/orgs.service';
 import { PlansService } from '../plans/plans.service';
 import { ShutterstockService } from '../shutterstock';
-import { targetAspectFor, slotShapeFor } from '../shutterstock/target-dimensions';
+import {
+  targetAspectFor,
+  slotShapeFor,
+  isAvatarSlot,
+} from '../shutterstock/target-dimensions';
+import {
+  fillImages,
+  keepSearchableKeywords,
+  FillMode,
+  ImageFillSummary,
+} from '../shutterstock/image-fill';
 import { wrapAffiliate, imagePageUrl } from '../shutterstock/affiliate';
 import { validateSlug } from '../common/slug-rules';
 import {
@@ -481,6 +491,33 @@ export class LayoutsService {
     return updatedLayout;
   }
 
+  // AI keyword chips for image Quick fill. Metered like any AI call; the
+  // editor still lets the user type keywords if this fails.
+  async suggestImageKeywords(
+    id: string,
+    orgId: string,
+  ): Promise<{ keywords: string[] }> {
+    const layout = await this.findOne(id, orgId);
+    if (!layout) {
+      throw new NotFoundException(`Layout with id ${id} not found`);
+    }
+
+    await this.aiUsageService.consume(
+      String(orgId),
+      'layout.image-keywords',
+      await this.aiLimitFor(String(orgId)),
+    );
+
+    const keywords = await this.openaiService.suggestImageKeywords({
+      name: layout.name,
+      siteName: layout.siteName,
+      description: layout.description,
+    });
+    return {
+      keywords: await keepSearchableKeywords(this.shutterstockService, keywords),
+    };
+  }
+
   // Fill the layout's image slots with stock photos. Same contract as
   // PagesService.customizeImages, but has to walk the three places a layout
   // keeps snippet references: nav, footer and subPages[].snippets[].
@@ -488,11 +525,13 @@ export class LayoutsService {
     id: string,
     orgId: string,
     options: {
+      mode?: FillMode;
+      keywords?: string;
       direction?: string;
       replaceExisting?: boolean;
       onlyMissing?: boolean;
     } = {},
-  ): Promise<Layout> {
+  ): Promise<Layout & { imageFill: ImageFillSummary }> {
     const layout = await this.findOne(id, orgId);
     if (!layout) {
       throw new NotFoundException(`Layout with id ${id} not found`);
@@ -522,6 +561,7 @@ export class LayoutsService {
       shape?: string;
       context?: string;
       targetAspect: number | null;
+      avatar: boolean;
     }> = [];
     const seen = new Set<string>();
 
@@ -556,60 +596,43 @@ export class LayoutsService {
           shape: slotShapeFor(ir.replacement) ?? undefined,
           context: context || undefined,
           targetAspect: targetAspectFor(ir.replacement),
+          avatar: isAvatarSlot(ir.replacement),
         });
       });
     });
 
-    const picksBySnippet = new Map<string, Array<{ token: string; image: any }>>();
-
-    // Skip the OpenAI + Shutterstock round-trip when there's nothing to fill
-    // (e.g. onlyMissing where the new snippets carry no image slots). Targeted
-    // snippets are still marked done below so the "missing" count clears.
-    if (slots.length) {
-      await this.aiUsageService.consume(
-        String(orgId),
-        'layout.customize-images',
-        await this.aiLimitFor(String(orgId)),
-      );
-
-      const { slots: queries } = await this.openaiService.deriveImageQueries({
+    // Nothing to fill (e.g. onlyMissing where the new snippets carry no image
+    // slots) means no searches and no AI call. Targeted snippets are still
+    // marked done below so the "missing" count clears.
+    const { picks, summary } = await fillImages(
+      {
+        shutterstock: this.shutterstockService,
+        openai: this.openaiService,
+        consumeAi: async () => {
+          await this.aiUsageService.consume(
+            String(orgId),
+            'layout.customize-images',
+            await this.aiLimitFor(String(orgId)),
+          );
+        },
+        logger: this.logger,
+      },
+      {
+        mode: options.mode === 'quick' ? 'quick' : 'smart',
+        keywords: options.keywords,
+        direction: options.direction,
         name: layout.name,
         siteName: layout.siteName,
         description: layout.description,
-        direction: options.direction,
-        slots: slots.map(({ targetAspect, ...slot }) => slot),
-      });
+        slots,
+      },
+    );
 
-      const aspectByKey = new Map(
-        slots.map((s) => [`${s.snippetId}::${s.token}`, s.targetAspect]),
-      );
-
-      const picks = await Promise.all(
-        queries.map(async (q) => {
-          const key = `${q.snippetId}::${q.token}`;
-          try {
-            const image = await this.shutterstockService.findBestMatch(
-              q.query,
-              aspectByKey.get(key) ?? null,
-            );
-            return image
-              ? { snippetId: q.snippetId, token: q.token, image }
-              : null;
-          } catch (error) {
-            this.logger.warn(
-              `Stock search failed for ${key} ("${q.query}"): ${String(error)}`,
-            );
-            return null;
-          }
-        }),
-      );
-
-      for (const pick of picks) {
-        if (!pick) continue;
-        const list = picksBySnippet.get(pick.snippetId) || [];
-        list.push({ token: pick.token, image: pick.image });
-        picksBySnippet.set(pick.snippetId, list);
-      }
+    const picksBySnippet = new Map<string, Array<{ token: string; image: any }>>();
+    for (const pick of picks) {
+      const list = picksBySnippet.get(pick.snippetId) || [];
+      list.push({ token: pick.token, image: pick.image });
+      picksBySnippet.set(pick.snippetId, list);
     }
 
     // Applies picks to one snippet reference and marks every targeted ref as
@@ -663,7 +686,13 @@ export class LayoutsService {
     if (!updatedLayout) {
       throw new NotFoundException(`Layout with id ${id} not found`);
     }
-    return updatedLayout;
+    // The summary rides along on the response so the editor can say which mode
+    // ran (and whether smart fill fell back). toJSON keeps the usual id transform.
+    const doc: any = updatedLayout;
+    return {
+      ...(typeof doc.toJSON === 'function' ? doc.toJSON() : doc),
+      imageFill: summary,
+    };
   }
 
   private readonly viewUrl = process.env.VIEW_URL || 'http://localhost:3100';

@@ -131,6 +131,15 @@ export class PagesController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Post(':id/image-keywords')
+  async suggestImageKeywords(
+    @Param('id') id: string,
+    @Request() req,
+  ): Promise<{ keywords: string[] }> {
+    return this.pagesService.suggestImageKeywords(id, req.user.activeOrg);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Post(':id/customize-images')
   async customizeImages(
     @Param('id') id: string,
@@ -138,6 +147,8 @@ export class PagesController {
     @Request() req,
   ): Promise<Page> {
     return this.pagesService.customizeImages(id, req.user.activeOrg, {
+      mode: dto?.mode,
+      keywords: typeof dto?.keywords === 'string' ? dto.keywords : undefined,
       direction: dto?.direction,
       replaceExisting: dto?.replaceExisting,
       onlyMissing: dto?.onlyMissing,

@@ -1,5 +1,19 @@
 export class CustomizeImagesDto {
   /**
+   * 'quick' (default in the editor): one Shutterstock search for `keywords`,
+   * results handed out by slot shape, no AI. 'smart' (the default when omitted,
+   * so older clients keep today's behaviour): OpenAI writes a query per slot,
+   * falling back to quick if OpenAI fails.
+   */
+  mode?: 'quick' | 'smart';
+
+  /**
+   * Quick-fill search keywords, e.g. "craft brewery taproom". When blank, the
+   * site name (or page/layout name) is used instead.
+   */
+  keywords?: string;
+
+  /**
    * Optional art direction folded into the query-derivation prompt, e.g.
    * "warm, natural light, no people". Never passed to Shutterstock verbatim.
    */

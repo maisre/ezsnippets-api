@@ -8,6 +8,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { ShutterstockImage, ImageSearchResult } from './interfaces';
+import { pickBest } from './image-fill';
 
 // Shutterstock search responses are watermarked preview comps. That is
 // deliberate: pages are mockups shown to a client for approval, and licensing
@@ -236,23 +237,7 @@ export class ShutterstockService {
     perPage = 9,
   ): Promise<ShutterstockImage | null> {
     const { images } = await this.searchImages(query, perPage);
-    if (!images.length) return null;
-    if (targetAspect === null) return images[0];
-
-    // Compare in log space so "twice as wide as wanted" and "half as wide"
-    // score as equally bad; a linear diff would bias toward wide crops.
-    let best = images[0];
-    let bestDistance = Infinity;
-    for (const image of images) {
-      const aspect = image.aspect || (image.height ? image.width / image.height : 0);
-      if (!aspect) continue;
-      const distance = Math.abs(Math.log(aspect / targetAspect));
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        best = image;
-      }
-    }
-    return best;
+    return pickBest(images, targetAspect);
   }
 
   private async handleApiError(response: Response): Promise<never> {

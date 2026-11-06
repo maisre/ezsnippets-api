@@ -18,7 +18,8 @@ function buildService(opts: {
   page: any;
   snippets: any[];
   queries: Array<{ snippetId: string; token: string; query: string }>;
-  findBestMatch: jest.Mock;
+  searchImages: jest.Mock;
+  openaiError?: Error;
 }) {
   const saved: any[] = [];
 
@@ -32,12 +33,14 @@ function buildService(opts: {
 
   const pubsub: any = { publish: jest.fn().mockResolvedValue(undefined) };
   const openai: any = {
-    deriveImageQueries: jest.fn().mockResolvedValue({ slots: opts.queries }),
+    deriveImageQueries: opts.openaiError
+      ? jest.fn().mockRejectedValue(opts.openaiError)
+      : jest.fn().mockResolvedValue({ slots: opts.queries }),
   };
   const snippetsService: any = {
     findOne: async (id: string) => opts.snippets.find((s) => String(s._id) === id),
   };
-  const shutterstock: any = { findBestMatch: opts.findBestMatch };
+  const shutterstock: any = { searchImages: opts.searchImages };
   // Metering is exercised in the ai-usage tests; here it just needs to allow the
   // call through so the image flow under test can run.
   const aiUsage: any = { consume: jest.fn().mockResolvedValue(undefined) };
@@ -67,6 +70,15 @@ function buildService(opts: {
   return { service, saved, openai, shutterstock, aiUsage };
 }
 
+// A search mock that always returns the given images.
+function found(...images: any[]) {
+  return jest.fn().mockResolvedValue({ images });
+}
+
+function img(id: string, aspect: number) {
+  return { id, previewUrl: `https://ss/${id}.jpg`, aspect, width: 0, height: 0 };
+}
+
 const SNIPPET = {
   _id: 's1',
   textReplacement: [{ token: 'headline', english: 'Fresh roasted daily' }],
@@ -79,9 +91,7 @@ describe('PagesService.customizeImages', () => {
       page: { name: 'Home', description: 'A coffee roaster', snippets: [abstractFor('s1')] },
       snippets: [SNIPPET],
       queries: [{ snippetId: 's1', token: 'hero', query: 'coffee beans roasting' }],
-      findBestMatch: jest
-        .fn()
-        .mockResolvedValue({ id: 'SS-111', previewUrl: 'https://ss/a.jpg', aspect: 1.5 }),
+      searchImages: found({ id: 'SS-111', previewUrl: 'https://ss/a.jpg', aspect: 1.5 }),
     });
 
     await service.customizeImages(PAGE_ID, ORG_ID);
@@ -102,9 +112,7 @@ describe('PagesService.customizeImages', () => {
       page: { name: 'Home', snippets: [abstractFor('s1', existing)] },
       snippets: [SNIPPET],
       queries: [{ snippetId: 's1', token: 'hero', query: 'coffee' }],
-      findBestMatch: jest
-        .fn()
-        .mockResolvedValue({ id: 'SS-NEW', previewUrl: 'https://ss/new.jpg', aspect: 1.5 }),
+      searchImages: found({ id: 'SS-NEW', previewUrl: 'https://ss/new.jpg', aspect: 1.5 }),
     });
 
     await service.customizeImages(PAGE_ID, ORG_ID, { replaceExisting: true });
@@ -127,9 +135,7 @@ describe('PagesService.customizeImages', () => {
       page: { name: 'Home', snippets: [abstractFor('s1', existing)] },
       snippets: [SNIPPET],
       queries: [{ snippetId: 's1', token: 'hero', query: 'coffee' }],
-      findBestMatch: jest
-        .fn()
-        .mockResolvedValue({ id: 'SS-222', previewUrl: 'https://ss/b.jpg', aspect: 1.5 }),
+      searchImages: found({ id: 'SS-222', previewUrl: 'https://ss/b.jpg', aspect: 1.5 }),
     });
 
     await service.customizeImages(PAGE_ID, ORG_ID, { replaceExisting: true });
@@ -145,18 +151,18 @@ describe('PagesService.customizeImages', () => {
     const existing = [
       { token: 'hero', replacement: 'https://cdn/mine.png' },
     ];
-    const findBestMatch = jest.fn();
+    const searchImages = jest.fn();
     const { service } = buildService({
       page: { name: 'Home', snippets: [abstractFor('s1', existing)] },
       snippets: [SNIPPET],
       queries: [],
-      findBestMatch,
+      searchImages,
     });
 
     const result = await service.customizeImages(PAGE_ID, ORG_ID);
 
     // No slots to fill, so neither OpenAI nor Shutterstock is called at all.
-    expect(findBestMatch).not.toHaveBeenCalled();
+    expect(searchImages).not.toHaveBeenCalled();
     expect(result.snippets[0].imageReplacementOverride).toEqual(existing);
   });
 
@@ -165,7 +171,7 @@ describe('PagesService.customizeImages', () => {
       page: { name: 'Home', description: 'A coffee roaster', snippets: [abstractFor('s1')] },
       snippets: [SNIPPET],
       queries: [],
-      findBestMatch: jest.fn(),
+      searchImages: jest.fn(),
     });
 
     await service.customizeImages(PAGE_ID, ORG_ID, { direction: 'warm, natural light' });
@@ -192,10 +198,10 @@ describe('PagesService.customizeImages', () => {
         { snippetId: 's1', token: 'hero', query: 'coffee' },
         { snippetId: 's1', token: 'avatar', query: 'barista portrait' },
       ],
-      findBestMatch: jest
-        .fn()
-        .mockRejectedValueOnce(new Error('shutterstock 429'))
-        .mockResolvedValueOnce({ id: 'SS-333', previewUrl: 'https://ss/c.jpg', aspect: 1 }),
+      searchImages: jest.fn(async (query: string) => {
+        if (query === 'coffee') throw new Error('shutterstock 429');
+        return { images: [{ id: 'SS-333', previewUrl: 'https://ss/c.jpg', aspect: 1 }] };
+      }),
     });
 
     await service.customizeImages(PAGE_ID, ORG_ID);
@@ -205,5 +211,124 @@ describe('PagesService.customizeImages', () => {
     expect(written).toEqual([
       { token: 'avatar', replacement: 'https://ss/c.jpg', shutterstockId: 'SS-333' },
     ]);
+  });
+
+  // Two slots whose queries share a top result used to get the same photo.
+  it('smart fill never puts the same photo in two slots when it has a choice', async () => {
+    const twoSlot = {
+      ...SNIPPET,
+      imageReplacement: [
+        { token: 'a', replacement: 'image::1' },
+        { token: 'b', replacement: 'image::1' },
+      ],
+    };
+    const { service, saved } = buildService({
+      page: { name: 'Home', snippets: [abstractFor('s1')] },
+      snippets: [twoSlot],
+      queries: [
+        { snippetId: 's1', token: 'a', query: 'coffee' },
+        { snippetId: 's1', token: 'b', query: 'coffee' },
+      ],
+      searchImages: found(img('SS-1', 1.5), img('SS-2', 1.4)),
+    });
+
+    await service.customizeImages(PAGE_ID, ORG_ID);
+
+    const ids = saved[0][0].imageReplacementOverride.map((o: any) => o.shutterstockId);
+    expect(new Set(ids).size).toBe(2);
+  });
+});
+
+describe('PagesService.customizeImages quick mode', () => {
+  const MULTI = {
+    _id: 's1',
+    textReplacement: [],
+    imageReplacement: [
+      { token: 'hero', replacement: 'image::5' }, // 1920x1300, wide
+      { token: 'card', replacement: 'image::11' }, // 400x300
+      { token: 'tall', replacement: 'image::24' }, // 3673x5207, tall
+      { token: 'face', replacement: 'image::8' }, // 60x60 avatar
+    ],
+  };
+
+  it('runs one keyword search plus a portrait search, with no AI call', async () => {
+    const searchImages = jest.fn(async (query: string) =>
+      query.includes('headshot')
+        ? { images: [img('FACE', 1)] }
+        : { images: [img('W', 1.5), img('C', 1.33), img('T', 0.7), img('X', 1)] },
+    );
+    const { service, saved, openai, aiUsage } = buildService({
+      page: { name: 'Home', snippets: [abstractFor('s1')] },
+      snippets: [MULTI],
+      queries: [],
+      searchImages,
+    });
+
+    const result: any = await service.customizeImages(PAGE_ID, ORG_ID, {
+      mode: 'quick',
+      keywords: '  craft   brewery ',
+    });
+
+    expect(openai.deriveImageQueries).not.toHaveBeenCalled();
+    expect(aiUsage.consume).not.toHaveBeenCalled();
+    expect(searchImages).toHaveBeenCalledTimes(2);
+    expect(searchImages.mock.calls[0][0]).toBe('craft brewery');
+
+    const byToken = Object.fromEntries(
+      saved[0][0].imageReplacementOverride.map((o: any) => [o.token, o.shutterstockId]),
+    );
+    expect(byToken).toEqual({ hero: 'W', card: 'C', tall: 'T', face: 'FACE' });
+    expect(result.imageFill).toMatchObject({
+      mode: 'quick',
+      fellBack: false,
+      keywords: 'craft brewery',
+      requested: 4,
+      filled: 4,
+    });
+  });
+
+  it('uses the site name when no keywords are given', async () => {
+    const searchImages = found(img('A', 1.5));
+    const { service } = buildService({
+      page: { name: 'Home', siteName: "Stan's HVAC", snippets: [abstractFor('s1')] },
+      snippets: [SNIPPET],
+      queries: [],
+      searchImages,
+    });
+
+    await service.customizeImages(PAGE_ID, ORG_ID, { mode: 'quick' });
+
+    expect(searchImages.mock.calls[0][0]).toBe("Stan's HVAC");
+  });
+
+  it('fails without marking anything when the search finds nothing', async () => {
+    const { service, saved } = buildService({
+      page: { name: 'Home', snippets: [abstractFor('s1')] },
+      snippets: [SNIPPET],
+      queries: [],
+      searchImages: found(),
+    });
+
+    await expect(
+      service.customizeImages(PAGE_ID, ORG_ID, { mode: 'quick', keywords: 'zxqv' }),
+    ).rejects.toThrow(/No stock photos matched/);
+    expect(saved).toHaveLength(0);
+  });
+
+  it('smart mode falls back to quick fill when OpenAI fails', async () => {
+    const searchImages = found(img('A', 1.5));
+    const { service, saved } = buildService({
+      page: { name: 'Home', siteName: 'Bean Co', snippets: [abstractFor('s1')] },
+      snippets: [SNIPPET],
+      queries: [],
+      searchImages,
+      openaiError: new Error('429 insufficient_quota'),
+    });
+
+    const result: any = await service.customizeImages(PAGE_ID, ORG_ID);
+
+    expect(searchImages.mock.calls[0][0]).toBe('Bean Co');
+    expect(saved[0][0].imageReplacementOverride[0].shutterstockId).toBe('A');
+    expect(result.imageFill).toMatchObject({ mode: 'quick', fellBack: true, keywords: 'Bean Co' });
   });
 });

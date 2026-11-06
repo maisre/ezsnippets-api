@@ -220,6 +220,67 @@ Return your response as a JSON object.`;
     }
   }
 
+  /**
+   * Suggest 3-5 short keyword sets for image Quick fill, from the site's name
+   * and description. One small call; the user picks or edits one, and Quick
+   * fill does the rest without any further AI.
+   */
+  async suggestImageKeywords(context: {
+    name: string;
+    siteName?: string;
+    description?: string;
+  }): Promise<string[]> {
+    if (!this.apiKey) {
+      throw new UnauthorizedException('OpenAI API key is not configured');
+    }
+
+    const systemPrompt = `You suggest search keywords for a stock photography API, to fill every image on a website with one search.
+
+Rules:
+- Return 5 options. Each option is 2-3 common, concrete, visual words describing the photos the site would show, e.g. "craft brewery taproom" or "dentist office smiling patient".
+- Describe photo SUBJECTS, not the website. No brand names, no punctuation, no sentences.
+- The photo library requires EVERY word to match, so prefer broad, common words over niche ones ("brewery beer" finds far more than "taproom flight paddle").
+- Make the options meaningfully different (e.g. people vs place vs product), all true to the site's subject.
+Return your response as a JSON object.`;
+
+    let userPrompt = `Site/page name: ${context.name}\n`;
+    if (context.siteName) userPrompt += `Site name: ${context.siteName}\n`;
+    if (context.description) userPrompt += `Description: ${context.description}\n`;
+    userPrompt += `\nRespond with a JSON object in this exact format:\n{"keywords": ["...", "..."]}`;
+
+    try {
+      const response = await this.client.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        response_format: { type: 'json_object' },
+        temperature: 0.8,
+      });
+
+      const content = response.choices[0]?.message?.content?.trim();
+      if (!content) return [];
+
+      const parsed = JSON.parse(content) as { keywords?: unknown };
+      if (!Array.isArray(parsed.keywords)) return [];
+
+      const seen = new Set<string>();
+      return parsed.keywords
+        .filter((k): k is string => typeof k === 'string')
+        .map((k) => k.replace(/\s+/g, ' ').trim().slice(0, 100))
+        .filter((k) => {
+          const key = k.toLowerCase();
+          if (!k || seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        })
+        .slice(0, 5);
+    } catch (error) {
+      return this.handleApiError(error);
+    }
+  }
+
   private handleApiError(error: unknown): never {
     if (error instanceof OpenAI.APIError) {
       const status = error.status;

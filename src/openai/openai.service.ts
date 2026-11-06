@@ -9,15 +9,25 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import OpenAI from 'openai';
+import {
+  ContentChunk,
+  ContentSnippetInput,
+  KeyedSlot,
+  MAX_CHUNK_SLOTS,
+  buildChunks,
+  dedupeSnippets,
+  mapLimit,
+  roleOf,
+} from './content-chunks';
+
+/** Parallel requests per customize run. Well inside gpt-4o-mini rate limits. */
+const CHUNK_CONCURRENCY = 10;
 
 export interface CustomizeContentInput {
   name: string;
   siteName?: string;
   description?: string;
-  snippets: Array<{
-    snippetId: string;
-    replacements: Array<{ token: string; original: string }>;
-  }>;
+  snippets: ContentSnippetInput[];
 }
 
 export interface CustomizeContentResult {
@@ -61,6 +71,14 @@ export class OpenaiService {
     this.client = new OpenAI({ apiKey: this.apiKey });
   }
 
+  /**
+   * Rewrite a page's or layout's placeholder text for the business.
+   *
+   * The work is split into small chunks (see content-chunks.ts) that run in
+   * parallel. When there is more than one chunk, a short site brief is written
+   * first so every chunk tells the same story. Slots the model skips get one
+   * targeted retry; anything still missing keeps its original text.
+   */
   async customizeContent(
     context: CustomizeContentInput,
   ): Promise<CustomizeContentResult> {
@@ -68,72 +86,176 @@ export class OpenaiService {
       throw new UnauthorizedException('OpenAI API key is not configured');
     }
 
-    const systemPrompt = `You are a website content customizer. Given a page/layout name, description, and a list of text placeholder tokens with their original values, generate contextually appropriate replacement text for each token. The replacement text should be tailored to the specific page/site context while maintaining a similar length and tone to the original. Return your response as a JSON object.`;
+    const unique = dedupeSnippets(context.snippets);
+    const { chunks, slots } = buildChunks(unique);
+    const texts = new Map<string, string>();
 
-    const tokenList = context.snippets.flatMap((s) =>
-      s.replacements.map((r) => ({
-        snippetId: s.snippetId,
-        token: r.token,
-        original: r.original,
+    if (chunks.length) {
+      try {
+        const brief = chunks.length > 1 ? await this.siteBrief(context) : undefined;
+        const runAll = async (list: ContentChunk[]) => {
+          await mapLimit(list, CHUNK_CONCURRENCY, async (chunk) => {
+            const got = await this.rewriteChunkWithRetry(context, chunk, brief);
+            got.forEach((text, key) => texts.set(key, text));
+          });
+        };
+
+        await runAll(chunks);
+
+        const missing = slots.filter((slot) => !texts.has(slot.key));
+        if (missing.length) {
+          this.logger.warn(
+            `Text customize: retrying ${missing.length}/${slots.length} skipped slots`,
+          );
+          await runAll(chunkMissing(missing, unique));
+        }
+      } catch (error) {
+        return this.handleApiError(error);
+      }
+
+      const stillMissing = slots.filter((slot) => !texts.has(slot.key)).length;
+      if (stillMissing) {
+        this.logger.warn(
+          `Text customize: ${stillMissing}/${slots.length} slots kept their original text`,
+        );
+      }
+    }
+
+    // Answer per input snippet (duplicates included) so callers can map
+    // results back by snippetId exactly as before.
+    const keyFor = new Map(slots.map((s) => [`${s.snippetId}::${s.token}`, s.key]));
+    return {
+      snippets: context.snippets.map((snippet) => ({
+        snippetId: snippet.snippetId,
+        replacements: snippet.replacements.map((r) => {
+          const key = keyFor.get(`${snippet.snippetId}::${r.token}`);
+          return {
+            token: r.token,
+            replacement: (key && texts.get(key)) || r.original,
+          };
+        }),
       })),
-    );
+    };
+  }
 
-    let userPrompt = `Page/Layout name: ${context.name}\n`;
-    if (context.siteName) {
-      userPrompt += `Site name: ${context.siteName}\n`;
+  /** One retry on failure: a single flaky request shouldn't sink the run. */
+  private async rewriteChunkWithRetry(
+    context: CustomizeContentInput,
+    chunk: ContentChunk,
+    brief?: string,
+  ): Promise<Map<string, string>> {
+    try {
+      return await this.rewriteChunk(context, chunk, brief);
+    } catch (error) {
+      if (
+        error instanceof OpenAI.APIError &&
+        (error.status === 401 || error.status === 403)
+      ) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      return this.rewriteChunk(context, chunk, brief);
     }
-    if (context.description) {
-      userPrompt += `Description: ${context.description}\n`;
+  }
+
+  private async rewriteChunk(
+    context: CustomizeContentInput,
+    chunk: ContentChunk,
+    brief?: string,
+  ): Promise<Map<string, string>> {
+    const systemPrompt = `You are a website copywriter. You rewrite the placeholder text of a website template so it fits a specific business.
+
+Rules:
+- Rewrite EVERY slot and return exactly one entry per key you are given.
+- Match each slot's role and rough length: headings stay short, links/buttons stay 1-4 words, paragraphs stay within about 30% of the original's length.
+- Write for this business only. Never keep details from the placeholder that belong to a different kind of business.
+- Stay consistent with the site brief when one is given. Invent plausible specifics (names, numbers, places) only where a slot needs them.
+- Use the section and block descriptions to decide what each slot is for, and avoid repeating the same phrase across slots.
+- Plain text only: no markdown, no HTML, no surrounding quotes.
+Return your response as a JSON object.`;
+
+    let userPrompt = `Site/page name: ${context.name}\n`;
+    if (context.siteName) userPrompt += `Site name: ${context.siteName}\n`;
+    if (context.description) userPrompt += `Description: ${context.description}\n`;
+    userPrompt += `Current year: ${new Date().getFullYear()}\n`;
+    if (brief) userPrompt += `\nSite brief (keep to these facts):\n${brief}\n`;
+
+    const sections = chunk.sections.map((section) => ({
+      ...(section.section ? { where: section.section } : {}),
+      ...(section.about ? { block: section.about } : {}),
+      slots: Object.fromEntries(
+        section.slots.map((slot) => [
+          slot.key,
+          { role: roleOf(slot.token), text: slot.original },
+        ]),
+      ),
+    }));
+    userPrompt += `\nBlocks to rewrite:\n${JSON.stringify(sections)}`;
+    userPrompt += `\n\nRespond with a JSON object in this exact format, covering every key:\n{"t": {"<key>": "<new text>"}}`;
+
+    const response = await this.client.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: 0.7,
+    });
+
+    const result = new Map<string, string>();
+    const content = response.choices[0]?.message?.content?.trim();
+    if (!content) return result;
+
+    let parsed: { t?: Record<string, unknown> };
+    try {
+      parsed = JSON.parse(content);
+    } catch {
+      // A cut-off reply is treated as all-skipped; the retry pass covers it.
+      return result;
     }
-    userPrompt += `\nHere are the text tokens that need customized replacement text:\n`;
-    userPrompt += JSON.stringify(tokenList, null, 2);
-    userPrompt += `\n\nRespond with a JSON object in this exact format:\n`;
-    userPrompt += `{"snippets": [{"snippetId": "...", "replacements": [{"token": "...", "replacement": "..."}]}]}`;
+    const wanted = new Set(chunk.sections.flatMap((s) => s.slots.map((x) => x.key)));
+    for (const [key, value] of Object.entries(parsed.t ?? {})) {
+      if (!wanted.has(key) || typeof value !== 'string') continue;
+      const text = value.trim();
+      if (text) result.set(key, text);
+    }
+    return result;
+  }
+
+  /**
+   * A few lines every chunk works from, so a split page still agrees on the
+   * business name, offerings and facts. Best-effort: without it the chunks
+   * still run, just with less shared context.
+   */
+  private async siteBrief(context: CustomizeContentInput): Promise<string | undefined> {
+    let userPrompt = `Site/page name: ${context.name}\n`;
+    if (context.siteName) userPrompt += `Site name: ${context.siteName}\n`;
+    if (context.description) userPrompt += `Description: ${context.description}\n`;
+    userPrompt += `\nWrite a brief of 4-6 short lines: business name, 3-5 specific offerings, who it is for, tone of voice, location if implied, and 2-3 concrete facts to reuse (e.g. founding year, hours, a guarantee). Invent plausible details where the description is silent.\nRespond with a JSON object: {"brief": "..."}`;
 
     try {
       const response = await this.client.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
-          { role: 'system', content: systemPrompt },
+          {
+            role: 'system',
+            content:
+              'You write a short brief for website copywriters so every section of a site tells the same story. Return your response as a JSON object.',
+          },
           { role: 'user', content: userPrompt },
         ],
         response_format: { type: 'json_object' },
         temperature: 0.7,
+        max_tokens: 350,
       });
-
       const content = response.choices[0]?.message?.content?.trim();
-      if (!content) {
-        this.logger.warn('OpenAI returned empty response');
-        return { snippets: [] };
-      }
-
-      const parsed = JSON.parse(content) as CustomizeContentResult;
-
-      // Ensure all tokens have replacements, falling back to originals
-      const result: CustomizeContentResult = {
-        snippets: context.snippets.map((inputSnippet) => {
-          const resultSnippet = parsed.snippets?.find(
-            (s) => s.snippetId === inputSnippet.snippetId,
-          );
-          return {
-            snippetId: inputSnippet.snippetId,
-            replacements: inputSnippet.replacements.map((inputReplacement) => {
-              const resultReplacement = resultSnippet?.replacements?.find(
-                (r) => r.token === inputReplacement.token,
-              );
-              return {
-                token: inputReplacement.token,
-                replacement:
-                  resultReplacement?.replacement || inputReplacement.original,
-              };
-            }),
-          };
-        }),
-      };
-
-      return result;
+      if (!content) return undefined;
+      const brief = JSON.parse(content)?.brief;
+      return typeof brief === 'string' && brief.trim() ? brief.trim() : undefined;
     } catch (error) {
-      return this.handleApiError(error);
+      this.logger.warn(`Site brief failed, continuing without it: ${String(error)}`);
+      return undefined;
     }
   }
 
@@ -338,4 +460,30 @@ Return your response as a JSON object.`;
       'Unable to connect to OpenAI API. Please try again later.',
     );
   }
+}
+
+/** Regroups skipped slots by snippet (keeping block context) into retry chunks. */
+function chunkMissing(
+  missing: KeyedSlot[],
+  snippets: ContentSnippetInput[],
+): ContentChunk[] {
+  const info = new Map(snippets.map((s) => [s.snippetId, s]));
+  const chunks: ContentChunk[] = [];
+  for (let i = 0; i < missing.length; i += MAX_CHUNK_SLOTS) {
+    const part = missing.slice(i, i + MAX_CHUNK_SLOTS);
+    const bySnippet = new Map<string, KeyedSlot[]>();
+    for (const slot of part) {
+      const list = bySnippet.get(slot.snippetId) || [];
+      list.push(slot);
+      bySnippet.set(slot.snippetId, list);
+    }
+    chunks.push({
+      sections: [...bySnippet.entries()].map(([id, list]) => ({
+        section: info.get(id)?.section,
+        about: info.get(id)?.about,
+        slots: list,
+      })),
+    });
+  }
+  return chunks;
 }

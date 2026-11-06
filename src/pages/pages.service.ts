@@ -14,6 +14,7 @@ import { CreatePageDto } from './dto/create-page.dto';
 import { UpdatePageDto } from './dto/update-page.dto';
 import { RedisPubSubService } from '../redis';
 import { OpenaiService } from '../openai';
+import { shortAbout } from '../openai/content-chunks';
 import { AiUsageService } from '../ai-usage';
 import { TemplatesService } from '../templates/templates.service';
 import { SnippetsService } from '../snippets/snippets.service';
@@ -487,6 +488,7 @@ export class PagesService {
       )
       .map(({ doc }) => ({
         snippetId: String(doc!._id),
+        about: shortAbout(doc!.description),
         replacements: doc!.textReplacement!.map((tr: any) => ({
           token: tr.token,
           original: tr.english || tr.replacement || '',

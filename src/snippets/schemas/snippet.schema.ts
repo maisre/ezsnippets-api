@@ -6,6 +6,8 @@ export const SnippetSchema = new mongoose.Schema(
     css: String,
     js: String,
     type: String,
+    // Short visual description of the block; gives AI text customization context.
+    description: String,
     tags: [String],
     textReplacement: Array<String>,
     imageReplacement: Array<String>,

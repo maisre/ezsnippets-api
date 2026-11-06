@@ -13,6 +13,7 @@ import { Layout } from './interfaces/layout.interface';
 import { CreateLayoutDto } from './dto/create-layout.dto';
 import { UpdateLayoutDto } from './dto/update-layout.dto';
 import { OpenaiService } from '../openai';
+import { shortAbout } from '../openai/content-chunks';
 import { AiUsageService } from '../ai-usage';
 import { TemplatesService } from '../templates/templates.service';
 import { SnippetsService } from '../snippets/snippets.service';
@@ -372,8 +373,17 @@ export class LayoutsService {
 
     // Build input: only targeted snippets that have textReplacement.
     // Seed the AI from the generic English variant (see pages.service).
+    // Where each block sits, so the model writes an About hero differently
+    // from a Contact hero.
+    const sectionFor = (entry: (typeof allSnippetRefs)[number]) => {
+      if (entry.path === 'nav') return 'Site navigation (every page)';
+      if (entry.path === 'footer') return 'Site footer (every page)';
+      const name = layout.subPages?.[entry.index ?? -1]?.name;
+      return name ? `${name} page` : undefined;
+    };
+
     const snippetsInput = allSnippetRefs
-      .map((entry, i) => ({ ref: entry.ref, doc: snippetDocs[i] }))
+      .map((entry, i) => ({ entry, ref: entry.ref, doc: snippetDocs[i] }))
       .filter(
         ({ ref, doc }) =>
           shouldDo(ref) &&
@@ -381,8 +391,10 @@ export class LayoutsService {
           !!doc.textReplacement &&
           doc.textReplacement.length > 0,
       )
-      .map(({ doc }) => ({
+      .map(({ entry, doc }) => ({
         snippetId: String(doc!._id),
+        section: sectionFor(entry),
+        about: shortAbout(doc!.description),
         replacements: doc!.textReplacement!.map((tr: any) => ({
           token: tr.token,
           original: tr.english || tr.replacement || '',

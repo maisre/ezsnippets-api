@@ -1,3 +1,4 @@
+import { aboutForInstance, instanceKeys } from '../common/snippet-instances';
 import {
   Inject,
   Injectable,
@@ -41,6 +42,7 @@ import {
   isValidIndex,
   clampInsertIndex,
 } from '../common/scratch-pad';
+import { ColorVariable } from '../common/theme-colors';
 
 @Injectable()
 export class PagesService {
@@ -142,11 +144,17 @@ export class PagesService {
       ({ _id, ...rest }: any) => rest,
     );
 
+    // The palette is part of how the page looks, so the copy keeps it.
+    const colorVariables = (source.toObject().colorVariables || []).map(
+      ({ variable, value, original }: any) => ({ variable, value, original }),
+    );
+
     const createdPage = new this.pageModel({
       name: `${source.name} (copy)`,
       siteName: source.siteName,
       description: source.description,
       snippets,
+      colorVariables,
       org: new Types.ObjectId(orgId),
       createdBy: new Types.ObjectId(userId),
     });
@@ -239,6 +247,38 @@ export class PagesService {
       roomId: id,
     });
     return updatedPage;
+  }
+
+  /**
+   * Replace the page's theme palette.
+   *
+   * Mirrors ez-view's PageService.updateColorVariables — same field, same
+   * whole-array write, same contentUpdatedAt bump so the dashboard thumbnail is
+   * re-shot — with the org scoping ez-view gets from its editor session.
+   * `colorVariables` must already be validated (parseColorVariables).
+   */
+  async setColorVariables(
+    id: string,
+    orgId: string,
+    colorVariables: ColorVariable[],
+  ): Promise<Page> {
+    if (!Types.ObjectId.isValid(id) || !Types.ObjectId.isValid(orgId)) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+
+    const updated = await this.pageModel
+      .findOneAndUpdate(
+        { _id: id, org: orgId, deletedAt: null },
+        { $set: { colorVariables, contentUpdatedAt: new Date() } },
+        { new: true },
+      )
+      .exec();
+    if (!updated) {
+      throw new NotFoundException(`Page with id ${id} not found`);
+    }
+
+    await this.pubsub.publish('page-updates', { action: 'updated', roomId: id });
+    return updated;
   }
 
   // ---------------------------------------------------------------------
@@ -472,13 +512,15 @@ export class PagesService {
     const snippetDocs = await Promise.all(
       page.snippets.map((sa: any) => this.snippetsService.findOne(String(sa.id))),
     );
+    // One key per position, so a snippet used twice gets two pieces of copy.
+    const keys = instanceKeys(page.snippets.map((sa: any) => String(sa.id)));
 
     // Build input for OpenAI: only targeted snippets that have textReplacement.
     // Seed the AI from the generic English variant (the representative text),
     // falling back to the lorem placeholder if a token has no english. The raw
     // `original` snippet text is intentionally not used.
     const snippetsInput = page.snippets
-      .map((sa: any, i: number) => ({ sa, doc: snippetDocs[i] }))
+      .map((sa: any, i: number) => ({ sa, doc: snippetDocs[i], key: keys[i] }))
       .filter(
         ({ sa, doc }) =>
           shouldDo(sa) &&
@@ -486,9 +528,9 @@ export class PagesService {
           !!doc.textReplacement &&
           doc.textReplacement.length > 0,
       )
-      .map(({ doc }) => ({
-        snippetId: String(doc!._id),
-        about: shortAbout(doc!.description),
+      .map(({ doc, key }) => ({
+        snippetId: key,
+        about: aboutForInstance(shortAbout(doc!.description), key),
         replacements: doc!.textReplacement!.map((tr: any) => ({
           token: tr.token,
           original: tr.english || tr.replacement || '',
@@ -539,11 +581,11 @@ export class PagesService {
 
     // Map results back onto the page's snippet references. In onlyMissing mode,
     // already-customized snippets are left exactly as they were.
-    const updatedSnippets = page.snippets.map((sa: any) => {
+    const updatedSnippets = page.snippets.map((sa: any, index: number) => {
       const obj = sa.toObject ? sa.toObject() : { ...sa };
       if (!shouldDo(sa)) return obj;
       const snippetResult = result.snippets.find(
-        (rs) => rs.snippetId === String(sa.id),
+        (rs) => rs.snippetId === keys[index],
       );
       if (snippetResult) {
         obj.textReplacementOverride = snippetResult.replacements;
@@ -631,20 +673,25 @@ export class PagesService {
       throw new NotFoundException(`Page with id ${id} not found`);
     }
 
-    // In onlyMissing mode we only touch snippets that were never image-populated
-    // (e.g. ones added after an earlier run), leaving the rest untouched.
-    const shouldDo = (sa: any) =>
-      !options.onlyMissing || sa.aiImagesPopulated !== true;
-
     const snippetDocs = await Promise.all(
       page.snippets.map((sa: any) =>
         this.snippetsService.findOne(String(sa.id)),
       ),
     );
 
-    // Slots are keyed by snippetId+token, not by position, so duplicate
-    // instances of the same snippet on a page resolve to the same image. That
-    // matches how text overrides already behave.
+    // In onlyMissing mode we only touch snippets that still have something
+    // missing: never image-populated (e.g. added after an earlier run), or
+    // populated but with a slot the earlier run found nothing for. The flag
+    // alone used to decide this, so an empty slot on a "populated" snippet
+    // could never be filled without redoing everything.
+    const shouldDo = (sa: any, index: number) =>
+      !options.onlyMissing ||
+      sa.aiImagesPopulated !== true ||
+      hasEmptyImageSlot(sa, snippetDocs[index]);
+
+    // Slots are keyed by instance (see instanceKeys), so a snippet used twice
+    // on the page gets a search, and a photo, for each copy.
+    const imageKeys = instanceKeys(page.snippets.map((sa: any) => String(sa.id)));
     const slots: Array<{
       snippetId: string;
       token: string;
@@ -653,10 +700,8 @@ export class PagesService {
       targetAspect: number | null;
       avatar: boolean;
     }> = [];
-    const seen = new Set<string>();
-
     page.snippets.forEach((sa: any, index: number) => {
-      if (!shouldDo(sa)) return;
+      if (!shouldDo(sa, index)) return;
       const snippet = snippetDocs[index];
       if (!snippet?.imageReplacement?.length) return;
 
@@ -677,12 +722,8 @@ export class PagesService {
       snippet.imageReplacement.forEach((ir: any) => {
         if (!options.replaceExisting && filled.has(ir.token)) return;
 
-        const key = `${String(snippet._id)}::${ir.token}`;
-        if (seen.has(key)) return;
-        seen.add(key);
-
         slots.push({
-          snippetId: String(snippet._id),
+          snippetId: imageKeys[index],
           token: ir.token,
           shape: slotShapeFor(ir.replacement) ?? undefined,
           context: context || undefined,
@@ -729,16 +770,19 @@ export class PagesService {
     // Apply picks and mark every targeted snippet as image-populated — even ones
     // with no slots or no successful pick — so a repeat "missing" run doesn't
     // keep re-targeting them. Non-targeted snippets are left exactly as-is.
-    const updatedSnippets = page.snippets.map((sa: any) => {
+    const updatedSnippets = page.snippets.map((sa: any, index: number) => {
       const obj = sa.toObject ? sa.toObject() : { ...sa };
-      if (!shouldDo(sa)) return obj;
+      if (!shouldDo(sa, index)) return obj;
 
-      const forSnippet = picksBySnippet.get(String(sa.id));
+      const forSnippet = picksBySnippet.get(imageKeys[index]);
       if (forSnippet?.length) {
         const overrides = new Map<string, any>(
           (obj.imageReplacementOverride || []).map((o: any) => [o.token, o]),
         );
         for (const { token, image } of forSnippet) {
+          // Only empty slots were asked for unless replacing; never let a
+          // pick land on an image the user already chose.
+          if (!options.replaceExisting && overrides.get(token)?.replacement) continue;
           // Written as a unit: replacing an override always replaces its id, so
           // a stale shutterstockId can never outlive the image it belonged to.
           overrides.set(token, {
@@ -1145,4 +1189,14 @@ export class PagesService {
     }
     return saved;
   }
+}
+
+/** True when a snippet has an image slot with no image chosen for it. */
+export function hasEmptyImageSlot(abstract: any, snippet: any): boolean {
+  const filled = new Set(
+    (abstract?.imageReplacementOverride || [])
+      .filter((o: any) => o?.replacement)
+      .map((o: any) => o.token),
+  );
+  return (snippet?.imageReplacement || []).some((ir: any) => !filled.has(ir.token));
 }

@@ -33,6 +33,7 @@ import {
   optionalIndex,
 } from './dto/scratch-pad.dto';
 import { SCRATCH_PAD_LIMIT } from '../common/scratch-pad';
+import { parseColorVariables } from '../common/theme-colors';
 
 @Controller('pages')
 export class PagesController {
@@ -153,6 +154,27 @@ export class PagesController {
       replaceExisting: dto?.replaceExisting,
       onlyMissing: dto?.onlyMissing,
     });
+  }
+
+  /**
+   * Set the page's theme palette (the composer's Theme card).
+   *
+   * Body: `{ colorVariables: [{ variable, value }] }` — the list replaces the
+   * stored colours; an empty list puts the page back on the template defaults.
+   * Typed `unknown` because nothing validates it before parseColorVariables.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Put(':id/colors')
+  async setColors(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Request() req,
+  ): Promise<Page> {
+    return this.pagesService.setColorVariables(
+      id,
+      req.user.activeOrg,
+      parseColorVariables(body),
+    );
   }
 
   // --- Scratch pad ---------------------------------------------------------

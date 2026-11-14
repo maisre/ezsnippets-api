@@ -1,3 +1,5 @@
+import { aboutForInstance, instanceKeys } from '../common/snippet-instances';
+import { hasEmptyImageSlot } from '../pages/pages.service';
 import {
   Inject,
   Injectable,
@@ -371,6 +373,12 @@ export class LayoutsService {
       ),
     );
 
+    // One key per position, so a snippet used twice gets two pieces of copy.
+    const textKeys = instanceKeys(allSnippetRefs.map((e) => String(e.ref.id)));
+    const textKeyByRef = new Map<any, string>(
+      allSnippetRefs.map((e, i) => [e.ref, textKeys[i]]),
+    );
+
     // Build input: only targeted snippets that have textReplacement.
     // Seed the AI from the generic English variant (see pages.service).
     // Where each block sits, so the model writes an About hero differently
@@ -392,9 +400,12 @@ export class LayoutsService {
           doc.textReplacement.length > 0,
       )
       .map(({ entry, doc }) => ({
-        snippetId: String(doc!._id),
+        snippetId: textKeyByRef.get(entry.ref)!,
         section: sectionFor(entry),
-        about: shortAbout(doc!.description),
+        about: aboutForInstance(
+          shortAbout(doc!.description),
+          textKeyByRef.get(entry.ref)!,
+        ),
         replacements: doc!.textReplacement!.map((tr: any) => ({
           token: tr.token,
           original: tr.english || tr.replacement || '',
@@ -461,7 +472,7 @@ export class LayoutsService {
       const obj = ref.toObject ? ref.toObject() : { ...ref };
       if (!shouldDo(ref)) return obj;
       const snippetResult = result.snippets.find(
-        (rs) => rs.snippetId === String(ref.id),
+        (rs) => rs.snippetId === textKeyByRef.get(ref),
       );
       if (snippetResult) {
         obj.textReplacementOverride = snippetResult.replacements;
@@ -549,9 +560,6 @@ export class LayoutsService {
       throw new NotFoundException(`Layout with id ${id} not found`);
     }
 
-    // In onlyMissing mode we only touch snippets never image-populated.
-    const shouldDo = (ref: any) =>
-      !options.onlyMissing || ref.aiImagesPopulated !== true;
 
     // Every snippet-abstract position in the layout, flattened.
     const refs: any[] = [];
@@ -566,6 +574,18 @@ export class LayoutsService {
     const snippetDocs = await Promise.all(
       refs.map((ref) => this.snippetsService.findOne(String(ref.id))),
     );
+    const docByRef = new Map<any, any>(refs.map((ref, i) => [ref, snippetDocs[i]]));
+    // Slots are keyed by instance, so a snippet used twice gets a photo per copy.
+    const imageKeys = instanceKeys(refs.map((ref) => String(ref.id)));
+    const imageKeyByRef = new Map<any, string>(refs.map((ref, i) => [ref, imageKeys[i]]));
+
+    // In onlyMissing mode we only touch snippets that still have something
+    // missing: never image-populated, or populated with a slot left empty.
+    // See the same rule in PagesService.customizeImages.
+    const shouldDo = (ref: any) =>
+      !options.onlyMissing ||
+      ref.aiImagesPopulated !== true ||
+      hasEmptyImageSlot(ref, docByRef.get(ref));
 
     const slots: Array<{
       snippetId: string;
@@ -575,8 +595,6 @@ export class LayoutsService {
       targetAspect: number | null;
       avatar: boolean;
     }> = [];
-    const seen = new Set<string>();
-
     refs.forEach((ref, index) => {
       if (!shouldDo(ref)) return;
       const snippet = snippetDocs[index];
@@ -598,12 +616,8 @@ export class LayoutsService {
       snippet.imageReplacement.forEach((ir: any) => {
         if (!options.replaceExisting && filled.has(ir.token)) return;
 
-        const key = `${String(snippet._id)}::${ir.token}`;
-        if (seen.has(key)) return;
-        seen.add(key);
-
         slots.push({
-          snippetId: String(snippet._id),
+          snippetId: imageKeys[index],
           token: ir.token,
           shape: slotShapeFor(ir.replacement) ?? undefined,
           context: context || undefined,
@@ -656,12 +670,14 @@ export class LayoutsService {
       const obj = ref.toObject ? ref.toObject() : { ...ref };
       if (!shouldDo(ref)) return obj;
 
-      const forSnippet = picksBySnippet.get(String(ref.id));
+      const forSnippet = picksBySnippet.get(imageKeyByRef.get(ref)!);
       if (forSnippet?.length) {
         const overrides = new Map<string, any>(
           (obj.imageReplacementOverride || []).map((o: any) => [o.token, o]),
         );
         for (const { token, image } of forSnippet) {
+          // Never let a pick land on an image the user already chose.
+          if (!options.replaceExisting && overrides.get(token)?.replacement) continue;
           overrides.set(token, {
             token,
             replacement: image.previewUrl,

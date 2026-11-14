@@ -1,5 +1,6 @@
 import { Document, Types } from 'mongoose';
 import { SnippetAbstract } from './snippet-abstract.interface';
+import { ColorVariable } from '../../common/theme-colors';
 
 export interface Page extends Document {
   readonly name: string;
@@ -12,6 +13,8 @@ export interface Page extends Document {
   readonly snippets: SnippetAbstract[];
   /** Parked snippets — see common/scratch-pad.ts. Never licensed or exported. */
   readonly scratchPad?: SnippetAbstract[];
+  /** Theme palette overrides — see common/theme-colors.ts. */
+  readonly colorVariables?: ColorVariable[];
   readonly org: Types.ObjectId;
   readonly createdBy?: Types.ObjectId;
 

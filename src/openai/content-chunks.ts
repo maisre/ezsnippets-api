@@ -70,7 +70,11 @@ export function roleOf(token: string): string {
   }
 }
 
-/** One entry per snippet id: a snippet used twice is rewritten once. */
+/**
+ * Drops exact repeats of a `snippetId`. Callers that want each copy of a
+ * repeated snippet written separately give the copies distinct ids (see
+ * common/snippet-instances.ts); this only guards against the same entry twice.
+ */
 export function dedupeSnippets(snippets: ContentSnippetInput[]): ContentSnippetInput[] {
   const seen = new Set<string>();
   return snippets.filter((s) => {

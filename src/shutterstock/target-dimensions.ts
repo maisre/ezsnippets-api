@@ -44,8 +44,21 @@ const TARGET_DIMENSIONS = new Map<string, string>([
  * token is unknown — in which case the caller should not express a preference
  * rather than guessing.
  */
+/**
+ * A slot's pixel size. Most slots name a key from the table above; the ones
+ * used as CSS backgrounds (heroes, banners) carry the size itself, e.g.
+ * "2074x1167". Without this they had no known shape, so fills treated a
+ * full-bleed hero as shapeless.
+ */
+function dimensionsFor(replacement: string): string | undefined {
+  return (
+    TARGET_DIMENSIONS.get(replacement) ??
+    (/^\d+x\d+$/i.test(replacement || '') ? replacement.toLowerCase() : undefined)
+  );
+}
+
 export function targetAspectFor(replacement: string): number | null {
-  const dims = TARGET_DIMENSIONS.get(replacement);
+  const dims = dimensionsFor(replacement);
   if (!dims) return null;
 
   const [w, h] = dims.split('x').map(Number);
@@ -71,7 +84,7 @@ export function slotShapeFor(replacement: string): 'wide' | 'tall' | 'square' | 
  * search like "craft brewery" returns no usable faces.
  */
 export function isAvatarSlot(replacement: string): boolean {
-  const dims = TARGET_DIMENSIONS.get(replacement);
+  const dims = dimensionsFor(replacement);
   if (!dims) return false;
   const [w, h] = dims.split('x').map(Number);
   if (!w || !h || w > 200 || h > 200) return false;

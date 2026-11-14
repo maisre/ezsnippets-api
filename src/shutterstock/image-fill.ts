@@ -225,6 +225,8 @@ export async function quickFill(
   deps: FillDeps,
   slots: FillSlot[],
   keywords: string,
+  // Photos already placed elsewhere on the page, which this fill must not repeat.
+  used: Set<string> = new Set(),
 ): Promise<FillPick[]> {
   if (!slots.length) return [];
 
@@ -252,7 +254,6 @@ export async function quickFill(
     );
   }
 
-  const used = new Set<string>();
   const picks = assignByShape(main, mainPool, used);
 
   const avatarPicks = assignByShape(avatars, avatarPool, used);
@@ -314,6 +315,27 @@ export async function smartFill(
     if (!image) continue;
     used.add(image.id);
     picks.push({ snippetId: slot.snippetId, token: slot.token, image });
+  }
+
+  // A slot whose own query found nothing (Shutterstock ANDs the words, so a
+  // specific query can come back empty) would otherwise be left on its
+  // placeholder with no hint why. Give those the plain keyword search instead:
+  // a broadly on-topic photo beats an empty hero. Photos already placed are
+  // not reused; a slot the fallback can't cover either stays empty.
+  const missing = input.slots.filter(
+    (s) => !picks.some((p) => p.snippetId === s.snippetId && p.token === s.token),
+  );
+  if (missing.length) {
+    const keywords = keywordsFor(input);
+    if (keywords) {
+      try {
+        picks.push(...(await quickFill(deps, missing, keywords, used)));
+      } catch (error) {
+        deps.logger.warn(
+          `Keyword fallback for ${missing.length} unfilled slot(s) failed: ${String(error)}`,
+        );
+      }
+    }
   }
   return picks;
 }

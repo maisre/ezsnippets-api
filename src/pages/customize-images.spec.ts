@@ -331,4 +331,95 @@ describe('PagesService.customizeImages quick mode', () => {
     expect(saved[0][0].imageReplacementOverride[0].shutterstockId).toBe('A');
     expect(result.imageFill).toMatchObject({ mode: 'quick', fellBack: true, keywords: 'Bean Co' });
   });
+
+  it('gives a slot whose own search found nothing a photo from the keyword search', async () => {
+    const twoSlot = {
+      ...SNIPPET,
+      imageReplacement: [
+        // A CSS-background slot names its size directly rather than a table key.
+        { token: 'hero', replacement: '2074x1167' },
+        { token: 'card', replacement: 'image::1' },
+      ],
+    };
+    const { service, saved } = buildService({
+      page: { name: 'Lumen Coffee', snippets: [abstractFor('s1')] },
+      snippets: [twoSlot],
+      queries: [
+        { snippetId: 's1', token: 'hero', query: 'single origin tasting bar portland' },
+        { snippetId: 's1', token: 'card', query: 'coffee' },
+      ],
+      searchImages: jest.fn(async (query: string) => {
+        if (query.startsWith('single origin')) return { images: [] };
+        if (query === 'coffee') return { images: [img('SS-1', 1.5)] };
+        // The keyword fallback ("Lumen Coffee"): the used photo plus a new one.
+        return { images: [img('SS-1', 1.5), img('SS-2', 1.78)] };
+      }),
+    });
+
+    await service.customizeImages(PAGE_ID, ORG_ID);
+
+    const byToken = Object.fromEntries(
+      saved[0][0].imageReplacementOverride.map((o: any) => [o.token, o.shutterstockId]),
+    );
+    expect(byToken).toEqual({ card: 'SS-1', hero: 'SS-2' });
+  });
+
+  it('onlyMissing still fills an empty slot on a snippet an earlier run marked done', async () => {
+    const populated = abstractFor('s1');
+    populated.aiImagesPopulated = true;
+    const { service, saved } = buildService({
+      page: { name: 'Home', snippets: [populated] },
+      snippets: [SNIPPET],
+      queries: [{ snippetId: 's1', token: 'hero', query: 'coffee' }],
+      searchImages: found(img('SS-9', 1.5)),
+    });
+
+    await service.customizeImages(PAGE_ID, ORG_ID, { onlyMissing: true });
+
+    expect(saved[0][0].imageReplacementOverride).toEqual([
+      { token: 'hero', replacement: 'https://ss/SS-9.jpg', shutterstockId: 'SS-9' },
+    ]);
+  });
+
+  it('leaves a chosen image alone when the same snippet is on the page twice', async () => {
+    const chosen = { token: 'hero', replacement: 'https://mine/hero.jpg' };
+    const { service, saved } = buildService({
+      page: { name: 'Home', snippets: [abstractFor('s1', [chosen]), abstractFor('s1')] },
+      snippets: [SNIPPET],
+      queries: [{ snippetId: 's1', token: 'hero', query: 'coffee' }],
+      searchImages: found(img('SS-9', 1.5)),
+    });
+
+    await service.customizeImages(PAGE_ID, ORG_ID);
+
+    expect(saved[0][0].imageReplacementOverride).toEqual([chosen]);
+    expect(saved[0][1].imageReplacementOverride[0].shutterstockId).toBe('SS-9');
+  });
+
+  it('searches for and fills each copy of a repeated snippet separately', async () => {
+    const { service, saved, openai } = buildService({
+      page: { name: 'Home', snippets: [abstractFor('s1'), abstractFor('s1')] },
+      snippets: [SNIPPET],
+      queries: [
+        { snippetId: 's1', token: 'hero', query: 'roasting' },
+        { snippetId: 's1#1', token: 'hero', query: 'pouring' },
+      ],
+      searchImages: jest.fn(async (query: string) => ({
+        images: query === 'roasting' ? [img('SS-A', 1.5)] : [img('SS-B', 1.5)],
+      })),
+    });
+
+    await service.customizeImages(PAGE_ID, ORG_ID);
+
+    // Both copies were put to the model as separate slots…
+    expect(openai.deriveImageQueries.mock.calls[0][0].slots.map((s: any) => s.snippetId)).toEqual([
+      's1',
+      's1#1',
+    ]);
+    // …and each got its own photo.
+    expect(saved[0].map((sa: any) => sa.imageReplacementOverride[0].shutterstockId)).toEqual([
+      'SS-A',
+      'SS-B',
+    ]);
+  });
 });

@@ -37,6 +37,21 @@ export const PageSchema = new mongoose.Schema(
     slug: { type: String, default: null },
     // Soft delete. Null (or absent, on pre-existing documents) means live.
     deletedAt: { type: Date, default: null },
+    // Theme palette overrides, rendered by ez-view as a `:root` block on top of
+    // its css-template defaults. Same shape as ez-view's page schema (both
+    // services share this collection): its content editor writes them on save,
+    // and the composer's Theme card writes them through PUT /pages/:id/colors.
+    // Empty means the template defaults. See common/theme-colors.ts.
+    colorVariables: {
+      type: [
+        {
+          variable: { type: String, required: true },
+          value: { type: String, required: true },
+          original: { type: String, required: true },
+        },
+      ],
+      default: [],
+    },
     org: { type: mongoose.Schema.Types.ObjectId, ref: 'org', required: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'user', required: false },
 

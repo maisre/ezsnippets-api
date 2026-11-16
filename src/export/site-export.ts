@@ -16,6 +16,8 @@ export interface ExportOptions {
   name: string;
   /** license-manifest.csv contents (Shutterstock ids). */
   licensingCsv: string;
+  /** Extra request headers for the render — see internal-auth.ts. */
+  headers?: Record<string, string>;
 }
 
 // An export holds every bundled image and then the zip in memory, inside the
@@ -136,6 +138,7 @@ async function buildMultiPageSiteZip(
   opts: ExportOptions,
 ): Promise<{ buffer: Buffer; filename: string }> {
   const res = await fetch(opts.renderUrl, {
+    headers: opts.headers,
     signal: AbortSignal.timeout(RENDER_TIMEOUT_MS),
   });
   if (!res.ok) {

@@ -19,6 +19,13 @@ export const LayoutSchema = new mongoose.Schema(
     // .zip export: a parked snippet is not on the layout. See
     // common/scratch-pad.
     scratchPad: { type: Array<SnippetAbstract>, default: [] },
+    // Set when the layout is built from a layout template. ez-view then
+    // rewrites the navbar's menu at render time to one link per subpage, named
+    // after it (ez-view view-layout/nav-links.ts) — a library nav ships generic
+    // links ("Products", "Testimonials") that match no template's pages, which
+    // left the exported site's menu mostly dead. Nothing is stored on the nav
+    // itself, so the menu keeps up as pages are added, renamed or reordered.
+    navFollowsPages: { type: Boolean, default: false },
     // Archived layouts are parked: they stop counting toward the org's plan
     // limit but stay listed in the dashboard and can be restored (which
     // re-checks the limit).

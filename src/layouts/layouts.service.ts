@@ -11,6 +11,10 @@ import {
 } from '@nestjs/common';
 import { Model, Types } from 'mongoose';
 import { exportMultiPageSiteZip } from '../export/site-export';
+import {
+  internalAuthHeaders,
+  layoutStaticScope,
+} from '../export/internal-auth';
 import { Layout } from './interfaces/layout.interface';
 import { CreateLayoutDto } from './dto/create-layout.dto';
 import { UpdateLayoutDto } from './dto/update-layout.dto';
@@ -174,6 +178,7 @@ export class LayoutsService {
       nav: src.nav,
       footer: src.footer,
       subPages,
+      navFollowsPages: src.navFollowsPages === true,
       org: new Types.ObjectId(orgId),
       createdBy: new Types.ObjectId(userId),
     });
@@ -981,6 +986,9 @@ export class LayoutsService {
       images.map((i) => `${i.shutterstockId},${i.uses}`).join('\n');
     return exportMultiPageSiteZip({
       renderUrl: `${this.viewUrl}/view/layout/${id}/static`,
+      // The route returns the whole downloadable site, so ez-view only
+      // answers it for us.
+      headers: internalAuthHeaders(layoutStaticScope(id)),
       name: layout.name || 'layout',
       licensingCsv: csv,
     });
@@ -1114,6 +1122,7 @@ export class LayoutsService {
             snippets: (sp.snippetIds ?? []).map((id) => ({ id })),
           }))
         : defaultSubPages(),
+      navFollowsPages: true,
       org: new Types.ObjectId(orgId),
       createdBy: new Types.ObjectId(userId),
     });
@@ -1150,6 +1159,7 @@ export class LayoutsService {
     if (template.kind === 'layout') {
       updateData.nav = template.nav ? { id: template.nav } : undefined;
       updateData.footer = template.footer ? { id: template.footer } : undefined;
+      updateData.navFollowsPages = true;
       const incoming = (template.subPages ?? []).map((sp) => ({
         name: sp.name,
         snippets: (sp.snippetIds ?? []).map((snippetId) => ({ id: snippetId })),

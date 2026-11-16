@@ -11,6 +11,8 @@ export interface Layout extends Document {
   readonly subPages: SubPage[];
   /** Parked snippets, layout-wide — see common/scratch-pad.ts. */
   readonly scratchPad?: SnippetAbstract[];
+  /** The nav's menu mirrors the subpages — see layout.schema.ts. */
+  readonly navFollowsPages?: boolean;
   readonly status?: 'active' | 'archived';
   readonly deletedAt?: Date | null;
   readonly org: Types.ObjectId;

@@ -44,6 +44,17 @@ import {
 } from '../common/scratch-pad';
 import { ColorVariable } from '../common/theme-colors';
 
+import { ThumbnailsService } from '../thumbnails/thumbnails.service';
+
+// The thumbnail goes with the document. Clearing the screenshot fields means a
+// manually recovered document is simply due for a fresh shot.
+const CLEARED_SCREENSHOT = {
+  thumbnailUrl: null,
+  screenshotAt: null,
+  screenshotQueuedFor: null,
+  screenshotQueuedAt: null,
+};
+
 @Injectable()
 export class PagesService {
   private readonly logger = new Logger(PagesService.name);
@@ -58,6 +69,7 @@ export class PagesService {
     private readonly shutterstockService: ShutterstockService,
     private readonly aiUsageService: AiUsageService,
     private readonly templatesService: TemplatesService,
+    private readonly thumbnails: ThumbnailsService,
   ) {}
 
   async findAll(): Promise<Page[]> {
@@ -992,9 +1004,10 @@ export class PagesService {
     await this.pageModel
       .updateMany(
         { _id: { $in: live.map((p) => p._id) } },
-        { $set: { deletedAt: new Date() } },
+        { $set: { deletedAt: new Date(), ...CLEARED_SCREENSHOT } },
       )
       .exec();
+    await this.thumbnails.removeAllForOrg(orgId, 'page');
     for (const p of live) {
       await this.pubsub.publish('page-updates', {
         action: 'updated',
@@ -1014,7 +1027,7 @@ export class PagesService {
     const deletedPage = await this.pageModel
       .findOneAndUpdate(
         { _id: id, org: orgId, deletedAt: null },
-        { $set: { deletedAt: new Date() } },
+        { $set: { deletedAt: new Date(), ...CLEARED_SCREENSHOT } },
         { new: true },
       )
       .exec();
@@ -1027,6 +1040,7 @@ export class PagesService {
       action: 'updated',
       roomId: id,
     });
+    await this.thumbnails.remove(orgId, 'page', id);
   }
 
   /**

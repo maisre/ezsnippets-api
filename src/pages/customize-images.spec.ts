@@ -65,6 +65,7 @@ function buildService(opts: {
     aiUsage,
     // Templates aren't on the image-customisation path.
     {} as any,
+    { remove: jest.fn(), removeAllForOrg: jest.fn() } as any, // thumbnails
   );
 
   return { service, saved, openai, shutterstock, aiUsage };

@@ -61,6 +61,7 @@ function buildService(page: any) {
     noop, // shutterstock
     noop, // aiUsage
     noop, // templates
+    { remove: jest.fn(), removeAllForOrg: jest.fn() } as any, // thumbnails
   );
 
   return { service, stored, writes, pubsub };

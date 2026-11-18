@@ -50,6 +50,7 @@ function buildService(stored: any | null) {
     noop, // shutterstock
     noop, // aiUsage
     noop, // templates
+    { remove: jest.fn(), removeAllForOrg: jest.fn() } as any, // thumbnails
   );
   return { service, calls, pubsub };
 }
